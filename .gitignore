@@ -1,0 +1,12 @@
+# Ignore everything (binaries)
+/*
+
+# Not these things
+!**/*.go
+!*/
+!.*/
+!.gitignore
+!.travis.yml
+
+# But these things also
+.idea/
