@@ -78,70 +78,50 @@ func buildConfig() {
 	config := `###################################
 ### Required fields for 'services:'
 # service: 
-#     - The name of the service you are testing. This will be shown in the Web UI as an identifier
+#       - The name of the service you are testing. This will be shown in the Web UI as an identifier
 #
 # port:    
-#     - The port that the service runs on.
+#       - The port that the service runs on.
 #
 # ip:      
-#     - The IP of the machine where this service is running
+#       - The IP of the machine where this service is running
 #
 # connection_protocol: 
-#     - The protocol for connecting to the service. Either 'tcp' or 'udp'.
-#
-# read_first:          
-#     - Wheter the remote server sends traffic first, or we do. For example; 
-#     - in HTTP, the client sends traffic first so this option would be 'no' for HTTP
+#       - The protocol for connecting to the service. Either 'tcp' or 'udp'.
 #
 # send_string:
-#     - The string to send to the remote service, prior to testing it's response.
-#     - This can be used to test services, do logins, etc before testing a response.
+#       - The string to send to the remote service, prior to testing it's response.
+#       - This can be used to test services, do logins, etc before testing a response.
 #
 # response_regex:
-#     - A regular expression that matches the reponse we are expecting from the server.
-#     - An empty string will match everything. '200 OK' would match the OK return code 
-#     - from an HTTP server. 
+#       - A regular expression that matches the reponse we are expecting from the server.
+#       - An empty string will match everything. '200 OK' would match the OK return code 
+#       - from an HTTP server. 
 ###
 ###################################
 
 services:
+    # This service actually demonstrates a login scenario
   - service: "mail_serv_imap"
-    port: "8080"
+    port: "143"
     ip: "172.20.241.40"
     connection_protocol: "tcp"
-    read_first: "no"
-    send_string: "GET / HTTP/1.0 \r\n\r\n"
-    response_regex: "200 OK"
+    send_string: "a0001 LOGIN \"sysadmin\" \"password\""
+    response_regex: "OK"
 
+    # In this service example, this program will just read the header from the service
   - service: "mail_serv_smtp"
-    port: "8000"
+    port: "25"
     ip: "172.20.241.40"
     connection_protocol: "tcp"
-    read_first: "no"
-    send_string: "GET / HTTP/1.0 \r\n\r\n"
-    response_regex: "200 OK"
+    send_string: ""
+    response_regex: "250"
 
+    # Simple http service example.
   - service: "webserver_http"
     port: "80"
     ip: "172.20.241.30"
     connection_protocol: "tcp"
-    read_first: "no"
-    send_string: "GET / HTTP/1.0 \r\n\r\n"
-    response_regex: "200 OK"
-
-  - service: "email_serv_imap"
-    port: "8080"
-    ip: "172.20.241.20"
-    connection_protocol: "tcp"
-    read_first: "no"
-    send_string: "GET / HTTP/1.0 \r\n\r\n"
-    response_regex: "200 OK"
-
-  - service: "box2"
-    port: "8080"
-    ip: "172.20.241.10"
-    connection_protocol: "tcp"
-    read_first: "no"
     send_string: "GET / HTTP/1.0 \r\n\r\n"
     response_regex: "200 OK"
 
@@ -175,6 +155,7 @@ config:
   pingTimeout: "5s" # time to wait for a response ping from host
   serviceInterval: "120s" # time between checking services
   serviceTimeout: "10s" # time to wait for a service to respond and finish its connection
+
 `
 	if wd, err := os.Getwd() ; err == nil {
 		if file, err := os.OpenFile(wd + "/" + defaultConfigFile, os.O_CREATE | os.O_WRONLY, 0666) ; err == nil {
