@@ -231,9 +231,10 @@ func main() {
 		}
 
 	} else {
-		ilog.Println("Config not found, if you would like to generate one, " +
-			"run this program again with the -buildcfg flag or use the -c flag to " +
-			"specify your own config!")
+		ilog.Println("Critical configuration file error encountered:", err)
+		ilog.Println("This might be because the Config file wasn't found. " +
+			"If this was the problem; run this program again with the " +
+			"-buildcfg flag or use the -c flag to specify your a different config!")
 		os.Exit(1)
 
 	}
@@ -245,8 +246,9 @@ func main() {
 
     	// Thread for pinging hosts. Results are shipped to the
     	// ScoreboardStateUpdater as ServiceUpdate's.
-    	// We don't read-lock these threads with the ScoreboardState
-    	// Because they will never read a variable that will change.
+    	// We don't read-lock these threads with the Scoreboard State
+    	// Because they should only be reading copies of the data that is stored in
+    	// Scoreboard State.
 		go func (channel chan ServiceUpdate, services []Host, scoreboardConfig ScoreboardConfig) {
 
 			ilog.Println("Started the Ping Check Provider")
@@ -265,8 +267,8 @@ func main() {
 
 	// Thread for querying services. Results are shipped to the
 	// ScoreboardStateUpdater as ServiceUpdate's
-	// We don't read-lock these threads because they will
-	// never read data that could potentially change
+	// We don't read-lock these threads because they should only be handling
+	// copies of the data that is in the Scoreboard State, not the actual data.
     go func (channel chan ServiceUpdate, hosts []Host, config ScoreboardConfig) {
 
     	ilog.Println("Started the Host Check Provider")
@@ -362,15 +364,32 @@ func pingHost(updateChannel chan ServiceUpdate, hostToPing string, pingTimeout t
 }
 
 // Thread to read service updates and write the updates to ScoreboardState. We do this so
-// we don't have to give every thread the ability to RW lock the ScoreboardState. This lets us test services
-// without locking and only locks for updates to the ScoreboardState, as it should be :D. The RW lock is maintained
-// for as long as there are service updates to be written to ScoreboardState.
+// we don't have to give every status checking thread the ability to
+// RW lock the ScoreboardState. This lets us test services without locking.
+// This function read locks for determining if an update should be applied to the
+// Scoreboard State. If an update needs to be applied, the function drops its read lock
+// and establishes a write lock to update the data. The write lock is maintained for as long as there
+// are service updates that need to be analyzed. If no write lock is established, the function maintains
+// it's read lock as long as there are service updates that need to be analyzed.
+//
+// The end goal of this complex locking is to minimize the time spent holding a
+// write lock. however, once this function has establish a write lock,
+// don't drop it because it might need to be re-established nano-seconds later.
+// This function read locks for safety reasons.
 func scoreboardStateUpdater(updateChannel chan ServiceUpdate, sbd *ScoreboardState) {
 
 	ilog.Println("Started the Scoreboard State Updater")
 
+	// These two flags are mutually exclusive. One being set does not rely on the other
+	// which is why we have two of them, instead of expressing their logic with a single flag.
+	// This function will drop it's read lock when it's in a sleeping state,
+	// and only establishes a read lock when needing to find data that might be
+	// changed, and only then establishing a write lock **if** that data needs to be
+	// changed. A write lock or a read lock is kept until there is no more
+	// data to be parsed through.
 	var (
-		wasLocked = false // Flag to hold wether we already have a lock or not.
+		isWriteLocked = false // Flag to hold whether we already have a lock or not.
+		isReadLocked = false // Flag to hold whether we have a read lock.
 	)
 
 	for {
@@ -380,40 +399,82 @@ func scoreboardStateUpdater(updateChannel chan ServiceUpdate, sbd *ScoreboardSta
 		// Test for there being another service update on the line
 		select {
 		case update = <- updateChannel: // There is another update on the line
-			if !wasLocked { // If we already have a RW lock, don't que another
-				sbd.lock.Lock()
-				wasLocked = true
+
+			// Read-Lock to be safe.
+			if !isWriteLocked && !isReadLocked {
+				sbd.lock.RLock()
+				isReadLocked = true
 			}
 
-			// Write the update
-			for indexOfHosts, host := range sbd.Hosts { // Classify the update and change variables as needed
+			// Interate down to the Service or Host that needs to be updated
+			for indexOfHosts, host := range sbd.Hosts {
 				if update.Ip == sbd.Hosts[indexOfHosts].Ip {
-					if update.ServiceUpdate {
+					if update.ServiceUpdate { // Is the update a service update, or an ICMP update?
+						// It's a service update so iterate down to the service that needs to be updated.
 						for indexOfServices, service := range host.Services {
 							if service.Port == update.ServicePort {
+								// Decide if the update contradicts the current Scoreboard State.
+								// If it does, we need to establish a Write lock before changing
+								// the service state.
+								if sbd.Hosts[indexOfHosts].Services[indexOfServices].IsUp != update.IsUp {
+									if !isWriteLocked { // If we already have a RW lock, don't que another
+										sbd.lock.RUnlock() // Unlock our Read lock before Write Locking
+										isReadLocked = false
+										sbd.lock.Lock() // WRITE LOCK
+										isWriteLocked = true
+									}
 
-								// Debug print that we received a service update
-								dlog.Printf("Received a service update from %v:%v. Status: %v", update.Ip,
-									sbd.Hosts[indexOfHosts].Services[indexOfServices].Port,
-									boolToWord(update.IsUp))
+									// Debug print that we received a service update
+									dlog.Printf("Received a service update from %v:%v. The status " +
+										"is different, so updating the Scoreboard State. Status: %v", update.Ip,
+										sbd.Hosts[indexOfHosts].Services[indexOfServices].Port,
+										boolToWord(update.IsUp))
 
-								// Update that services state
-								sbd.Hosts[indexOfHosts].Services[indexOfServices].IsUp = update.IsUp
+									// Update that services state
+									sbd.Hosts[indexOfHosts].Services[indexOfServices].IsUp = update.IsUp
+	 							} else {
+									// Debug print that we received a service update
+									dlog.Printf("Received a service update from %v:%v. The status " +
+										"is not different, so not updating the Scoreboard State. Status: %v", update.Ip,
+										sbd.Hosts[indexOfHosts].Services[indexOfServices].Port,
+										boolToWord(update.IsUp))
+								}
 							}
 						}
-
 					} else {
-						dlog.Printf("Received a ping update from %v. Status: %v", update.Ip,
-							boolToWord(update.IsUp))
+						// We are dealing with an ICMP update. We need to determine if the
+						// Scoreboard State needs to be updated.
+						if sbd.Hosts[indexOfHosts].PingUp != update.IsUp { // We need to establish a write lock
+							if !isWriteLocked { // If we already have a RW lock, don't que another
+								sbd.lock.RUnlock()
+								isReadLocked = false
+								sbd.lock.Lock() // WRITE LOCK
+								isWriteLocked = true
+							}
 
-						sbd.Hosts[indexOfHosts].PingUp = update.IsUp
+							dlog.Printf("Received a ping update from %v. The status is different, " +
+								"so updating the Scoreboard State. Status: %v", update.Ip,
+								boolToWord(update.IsUp))
+
+							sbd.Hosts[indexOfHosts].PingUp = update.IsUp
+						} else {
+							dlog.Printf("Received a ping update from %v. The status is not different," +
+								"so not updating the Scoreboard State. Status: %v", update.Ip,
+								boolToWord(update.IsUp))
+						}
 					}
 				}
 			}
 		default: // There is not another update on the line, so we'll wait for one
-			if wasLocked { // If we have a lock because we wrote an update, unlock so clients can view content.
+			// If we have a write lock because we wrote an update,
+			// unlock so clients can view content. otherwise, we had a read
+			// lock that needs to be released because we don't need it any longer.
+			if isWriteLocked {
 				sbd.lock.Unlock()
-				wasLocked = false
+				isWriteLocked = false
+			} else if isReadLocked { // This isn't a else case because this default case might be ran quickly in succession
+				sbd.lock.RUnlock()
+				isReadLocked = false
 			}
 
 			// Wait 1 second, then check again!
@@ -498,12 +559,10 @@ func parseConfigToScoreboard(config *Config, scoreboard *ScoreboardState) error 
 			}
 		}
 
-		// TODO: Convert to ConfigError
 		// Test the regex for services and error if the regex parser can't handle it.
 		if _, err := regexp.Match(mp["response_regex"], []byte("")) ; err != nil {
-			ilog.Println("Invalid regular expression:", err)
-			ilog.Println("For more information see https://github.com/google/re2/wiki/Syntax")
-			os.Exit(1)
+			return ConfigError(fmt.Sprintf("invalid regular expression: %v \nFor more " +
+				"information see https://github.com/google/re2/wiki/Syntax", err))
 		}
 
 		// If the above loop got this far, then we are looking at a Host we haven't seen yet,
