@@ -1,78 +1,13 @@
 package main
 
+// This function is kept in it's own file to cut down on having to
+// look for things around it.
+
 import (
-	"fmt"
-	"gopkg.in/yaml.v2"
 	"io"
 	"os"
-	"os/user"
-	"runtime"
 	"strings"
 )
-
-type Config struct {
-	Services []map[string]string
-	Config   map[string]string
-}
-
-// This function simple Opens the config.yaml file and parses it into a go type, then returns that type.
-func initConfig() (Config, error) {
-	var (
-		configFile *os.File
-		config Config
-	)
-
-	// Test each config file option.
-	if f, err := os.Open(configFileString); err == nil {
-		configFile = f
-	} else if f, err := os.Open(defaultConfigFile) ; err == nil{
-		configFile = f
-	} else {
-		return config, err
-	}
-
-	defer configFile.Close()
-
-	dlog.Println("Opened config:", configFile.Name())
-
-	// Attempt to decode the config into a go type
-	yamlDecoder := yaml.NewDecoder(configFile)
-	if err := yamlDecoder.Decode(&config) ; err == nil {
-		return config, nil
-	} else {
-		return config, err
-	}
-
-}
-
-// This function tests privileges and initiates an unclean exit if the
-// incorrect privileges are used to run the program.
-func testPrivileges() {
-	if usr, err := user.Current(); err == nil {
-
-		// Attempt to identify the Administrator group
-		if runtime.GOOS == "windows" && ! strings.HasSuffix(usr.Gid, "-544") {
-			fmt.Println("Please run as Administrator. " +
-				"This program needs Administrator to open port 80 and do ICMP.")
-
-			os.Exit(1)
-		} else if usr.Gid != "0" && usr.Uid != "0" { // ID root
-			if runtime.GOOS == "linux" {
-				fmt.Println("Please run as root. " +
-					"This program needs root to open port 80 and do ICMP.")
-			} else { // Dunno bud
-				fmt.Println("Please run with elevated privileges. " +
-					"This program needs elevated privileges to open port 80 and do ICMP")
-			}
-
-			os.Exit(1)
-		}
-	}
-}
-
-func boolToWord(flag bool) string {
-	if flag { return "yes" } else { return "no" }
-}
 
 func buildConfig() {
 	config := `###################################
