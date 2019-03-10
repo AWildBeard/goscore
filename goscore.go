@@ -22,19 +22,24 @@ import (
 	"time"
 )
 
-var (
-    // Variables
-    defaultConfigFile = "config.yaml"
-    configFileString string
-    debug bool
-    buildCfg bool
+const defaultConfigFileName string = "config.yaml"
 
-    // Logger
+var (
+	// Command line options
+    defaultConfigFileLocation string
+    debug                     bool
+    buildCfg                  bool
+
+    // Logging factories
     ilog *log.Logger
     dlog *log.Logger
 )
 
-// Struct to represent the scoreboard's state
+// Struct to represent the scoreboard's state. This type holds
+// The hosts that are scored and the config by witch to score them.
+// There is also a RW lock to control reading and writing to this
+// type. This is implemented mainly because this type implements
+// ServeHTTP so it can serve it's data over HTTP
 type ScoreboardState struct {
 	// The hosts this scoreboard scores
 	Hosts  []Host
@@ -48,15 +53,15 @@ type ScoreboardState struct {
 	lock   sync.RWMutex
 }
 
-// This struct represents the current configuration for the scoreboard.
-// Namely, the timeouts for checking host's services and ICMP.
+// This struct represents the configuration for the scoreboard.
+// Namely, the timeouts for checking host's services and ICMP, etc.
 type ScoreboardConfig struct {
 	// Config option that represents whether the scoreboard should
-	// ICMP testing for Hosts
+	// ICMP test Hosts
 	pingHosts bool
 
 	// Config option that signifies the duration to wait before
-	// trying to ping all the hosts in the configuration file.
+	// trying to ping all the hosts defined in the Scoreboard State.
 	TimeBetweenPingChecks time.Duration
 
 	// The duration to wait on hosts to respond to this programs
@@ -64,35 +69,37 @@ type ScoreboardConfig struct {
 	PingTimeout time.Duration
 
 	// The duration to wait before trying to check the services
-	// as they are defined in the configuration file.
+	// as they are defined in the Scoreboard State.
 	TimeBetweenServiceChecks time.Duration
 
-	// The duration to wait for all services to respond to
-	// this program.
+	// The duration to wait for all services (not ICMP) to
+	// respond to this program.
 	ServiceTimeout time.Duration
 }
 
 // Struct to hold an update to a service held by ScoreboardState
 type ServiceUpdate struct {
-	// The IP of the machine who's service update this is for.
-	// This is used as a unique identifier to identify machines.
+	// The IP of the host who's service update this is for.
+	// This is used as a unique identifier to identify hosts.
 	Ip string
 
 	// If true, this ServiceUpdate contains data on an update to a service,
-	// otherwise, this is a ping update
+	// otherwise, this is a ICMP update report.
 	ServiceUpdate bool
 
 	// Flag to represent whether the Service is up, or if ServiceUpdate is
-	// false, this flag represents if the Ping is up for the remote machine
+	// false, this flag represents if ICMP is up for the remote host
 	IsUp bool
 
-	// This variable contains the index of the port that holds a service that is now up
+	// This variable contains the port
+	// that holds a service. This is used to uniquely identify
+	// services contained within hosts for the Scoreboard State Updater
 	ServicePort string
 }
 
-// Struct to represent a Host that contains Hosts
+// Struct to represent a Host that contains Services
 type Host struct {
-	// The service provided on the host
+	// The service(s) provided on the host
 	Services []Service
 
 	// The IP Address of a Host
@@ -115,7 +122,8 @@ type Service struct {
 	SendString string
 
 	// A Regular Expression that can match the expected
-	// response fro the remote Service.
+	// response from the remote Service. This is optional
+	// and can be and empty string.
 	RegexResponse string
 
 	// The Layer 4 Protocol used to connect to the Service.
@@ -126,7 +134,8 @@ type Service struct {
 	IsUp bool
 }
 
-// Function to serve the index.html for the scoreboard.
+// Function to serve the `index.html` for the scoreboard.
+// Implements ServeHTTP for ScoreboardState
 func (sbd *ScoreboardState) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Establish a read-only lock to the scoreboard to retrieve data,
 	// then drop the lock after we have retrieved that data we need.
@@ -154,7 +163,8 @@ func NewScoreboard() ScoreboardState {
 }
 
 // A struct to represent the parsed yaml config. This type is
-// passed directly to yaml.v2 for parsing
+// passed directly to yaml.v2 for parsing the physical
+// config file into active memory used to create ServiceState.Config
 type Config struct {
 	Services []map[string]string
 	Config   map[string]string
@@ -164,17 +174,22 @@ type Config struct {
 // specific required configuration fields.
 type ConfigError string
 
-// Converts ConfigError to a String
+// Converts ConfigError to a String.
+// Implements Error for ConfigError
 func (err ConfigError) Error() string {
 	return string(err)
 }
 
 func init() {
+	// Determine the path to this executable
 	execPath, _ := os.Executable()
-	configFileString = fmt.Sprintf("%v/%v", path.Dir(execPath), defaultConfigFile)
+
+	// Set the default for configFileLocation which has to be determined at runtime.
+	defaultConfigFileLocation = fmt.Sprintf("%v/%v", path.Dir(execPath), defaultConfigFileName)
+
 	cwd, _ := os.Getwd()
 
-	flag.StringVar(&configFileString, "c", configFileString,
+	flag.StringVar(&defaultConfigFileLocation, "c", defaultConfigFileLocation,
 	    "Specify a custom config file location")
 	flag.BoolVar(&debug, "d", false, "Print debug messages")
 	flag.BoolVar(&buildCfg, "buildcfg", false, "Output an example configuration file " +
@@ -197,7 +212,7 @@ func main() {
         dlog = log.New(ioutil.Discard, "", 0)
     }
 
-	if buildCfg { //buildcfg flag was set so write a config and exit
+	if buildCfg { // buildcfg flag was set so write a config and exit
 		buildConfig()
 		os.Exit(0)
 	}
@@ -245,10 +260,10 @@ func main() {
     if scoreboard.config.pingHosts { // The ping option was set
 
     	// Thread for pinging hosts. Results are shipped to the
-    	// ScoreboardStateUpdater as ServiceUpdate's.
+    	// ScoreboardStateUpdater (defined below) as ServiceUpdates.
     	// We don't read-lock these threads with the Scoreboard State
-    	// Because they should only be reading copies of the data that is stored in
-    	// Scoreboard State.
+    	// Because they should only be reading copies of the data that
+    	// is stored in Scoreboard State.
 		go func (channel chan ServiceUpdate, services []Host, scoreboardConfig ScoreboardConfig) {
 
 			ilog.Println("Started the Ping Check Provider")
@@ -266,7 +281,7 @@ func main() {
 	}
 
 	// Thread for querying services. Results are shipped to the
-	// ScoreboardStateUpdater as ServiceUpdate's
+	// ScoreboardStateUpdater as ServiceUpdates
 	// We don't read-lock these threads because they should only be handling
 	// copies of the data that is in the Scoreboard State, not the actual data.
     go func (channel chan ServiceUpdate, hosts []Host, config ScoreboardConfig) {
@@ -302,7 +317,7 @@ func main() {
 }
 
 // This function checks a single service in the predefined
-// manner contained in the Service struct.
+// manner contained in the Service type.
 func checkService(updateChannel chan ServiceUpdate, ip string, service Service, serviceTimeout time.Duration) {
 	serviceUp := false
 
@@ -341,6 +356,9 @@ func checkService(updateChannel chan ServiceUpdate, ip string, service Service, 
 	}
 }
 
+// Function to ping a host at an IP. Results are shipped as ServiceUpdates through
+// updateChannel. This function gives the remote host three chances to respond.
+// As long as one response is received, the host is marked as up.
 func pingHost(updateChannel chan ServiceUpdate, hostToPing string, pingTimeout time.Duration) {
 	pingSuccess := false
 
@@ -452,12 +470,14 @@ func scoreboardStateUpdater(updateChannel chan ServiceUpdate, sbd *ScoreboardSta
 								isWriteLocked = true
 							}
 
+							// Debug print the service update
 							dlog.Printf("Received a ping update from %v. The status is different, " +
 								"so updating the Scoreboard State. Status: %v", update.Ip,
 								boolToWord(update.IsUp))
 
 							sbd.Hosts[indexOfHosts].PingUp = update.IsUp
 						} else {
+							// Debug print the service update
 							dlog.Printf("Received a ping update from %v. The status is not different," +
 								"so not updating the Scoreboard State. Status: %v", update.Ip,
 								boolToWord(update.IsUp))
@@ -466,9 +486,10 @@ func scoreboardStateUpdater(updateChannel chan ServiceUpdate, sbd *ScoreboardSta
 				}
 			}
 		default: // There is not another update on the line, so we'll wait for one
-			// If we have a write lock because we wrote an update,
-			// unlock so clients can view content. otherwise, we had a read
-			// lock that needs to be released because we don't need it any longer.
+			// If we have a write lock because we changed the ScoreboardState
+			// because of an ServiceUpdate, release the Write lock so clients
+			// can view content. Otherwise, we had a read lock that needs to
+			// be released because we don't need it any longer.
 			if isWriteLocked {
 				sbd.lock.Unlock()
 				isWriteLocked = false
@@ -477,13 +498,14 @@ func scoreboardStateUpdater(updateChannel chan ServiceUpdate, sbd *ScoreboardSta
 				isReadLocked = false
 			}
 
-			// Wait 1 second, then check again!
+			// Wait 1 second, then check for ServiceUpdates again!
 			time.Sleep(1 * time.Second)
 		}
 	}
 
 }
 
+// This function converts the raw Config type to ScoreboardState.Config
 func parseConfigToScoreboard(config *Config, scoreboard *ScoreboardState) error {
 	// Determine if the user has set the ping option in the config file.
 	if config.Config["pingHosts"] != "yes" {
@@ -517,6 +539,7 @@ func parseConfigToScoreboard(config *Config, scoreboard *ScoreboardState) error 
 		return ConfigError(fmt.Sprint("Failed to parse serviceInterval from config file:", err))
 	}
 
+	// Check for ServiceTimeout
 	if stimeout, err := time.ParseDuration(config.Config["serviceTimeout"]) ; err == nil {
 		scoreboard.config.ServiceTimeout = stimeout
 
@@ -529,7 +552,7 @@ func parseConfigToScoreboard(config *Config, scoreboard *ScoreboardState) error 
 		return ConfigError("There must be at least one service defined in the config file!")
 	}
 
-	// Create the services for the ScoreboardState
+	// Create the Services and Hosts for the ScoreboardState
 	for _, mp := range config.Services {
 		newHostsIp := mp["ip"] // Use IP as a unique identifier for machines
 		createNewHost := true
@@ -579,7 +602,8 @@ func parseConfigToScoreboard(config *Config, scoreboard *ScoreboardState) error 
 	return nil
 }
 
-// This function simple Opens the config.yaml file and parses it into a go type, then returns that type.
+// This function simple Opens the config.yaml file and parses it
+// into the Config type, then returns that type.
 func initConfig() (Config, error) {
 	var (
 		configFile *os.File
@@ -587,9 +611,9 @@ func initConfig() (Config, error) {
 	)
 
 	// Test each config file option.
-	if f, err := os.Open(configFileString); err == nil {
+	if f, err := os.Open(defaultConfigFileLocation); err == nil {
 		configFile = f
-	} else if f, err := os.Open(defaultConfigFile) ; err == nil{
+	} else if f, err := os.Open(defaultConfigFileName) ; err == nil{
 		configFile = f
 	} else {
 		return config, err
@@ -606,7 +630,6 @@ func initConfig() (Config, error) {
 	} else {
 		return config, err
 	}
-
 }
 
 // This function tests privileges and initiates an unclean exit if the
@@ -640,4 +663,3 @@ func testPrivileges() {
 func boolToWord(flag bool) string {
 	if flag { return "yes" } else { return "no" }
 }
-
