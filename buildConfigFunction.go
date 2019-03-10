@@ -29,7 +29,7 @@ func buildConfig() {
 #       - This can be used to test services, do logins, etc before testing a response.
 #
 # response_regex:
-#       - A regular expression that matches the reponse we are expecting from the server.
+#       - A regular expression that matches the response we are expecting from the server.
 #       - An empty string will match everything. '200 OK' would match the OK return code 
 #       - from an HTTP server. 
 ###
