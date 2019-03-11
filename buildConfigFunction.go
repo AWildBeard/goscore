@@ -92,8 +92,8 @@ config:
   serviceTimeout: "10s" # time to wait for a service to respond and finish its connection
 
 `
-	if wd, err := os.Getwd() ; err == nil {
-		if file, err := os.OpenFile(wd + "/" +defaultConfigFileName, os.O_CREATE | os.O_WRONLY, 0666) ; err == nil {
+	if wd, err := os.Getwd(); err == nil {
+		if file, err := os.OpenFile(wd+"/"+defaultConfigFileName, os.O_CREATE|os.O_WRONLY, 0666); err == nil {
 			io.Copy(file, strings.NewReader(config))
 		}
 	}
