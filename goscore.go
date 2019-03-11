@@ -194,6 +194,8 @@ func init() {
 	flag.BoolVar(&debug, "d", false, "Print debug messages")
 	flag.BoolVar(&buildCfg, "buildcfg", false, "Output an example configuration file "+
 		"to "+cwd+"/config.yaml")
+
+	flag.Usage = usage
 }
 
 func main() {
@@ -655,6 +657,30 @@ func testPrivileges() {
 			os.Exit(1)
 		}
 	}
+}
+
+// Usage function to show program usage when the -h flag is given.
+func usage() {
+	fmt.Println(`USAGE:
+	Starting goscore can be as simple as running it without any arguments.
+	You can enable debug mode by passing the -d flag and can speicify your
+	own config file by using the -c flag. You can build a simple config
+	example by passing the -buildcfg flag. Use the -h flag to print this 
+	message
+
+LICENSE:
+	You can view your rights with this software in the LICENSE here: 
+	https://github.com/AWildBeard/goscore/blob/master/LICENSE and
+	can download the source here: https://github.com/AWildBeard/goscore
+
+	By using this piece of software you agree to the terms as they are
+	detailed in the LICENSE
+
+	This software is distributed as Free and Open Source Software.
+
+AUTHOR:
+	This program was created with love by Michael Mitchell for the
+	University of West Florida Cyber Security Club`)
 }
 
 // Utility function to translate a boolean flag to
