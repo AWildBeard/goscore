@@ -15,24 +15,17 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/sparrc/go-ping"
-	"gopkg.in/yaml.v2"
-	"io"
+	"github.com/AWildBeard/goscore/scoreboard"
 	"io/ioutil"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"os/user"
 	"path"
-	"regexp"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -48,151 +41,6 @@ var (
 	ilog *log.Logger
 	dlog *log.Logger
 )
-
-// Struct to represent the scoreboard's state. This type holds
-// The hosts that are scored and the config by witch to score them.
-// There is also a RW lock to control reading and writing to this
-// type. This is implemented mainly because this type implements
-// ServeHTTP so it can serve it's data over HTTP
-type ScoreboardState struct {
-	// The hosts this scoreboard scores
-	Hosts []Host
-
-	// Scoreboard specific config to dictate
-	// how to check services
-	config ScoreboardConfig
-
-	// The RW lock that will allow updating the scoreboard
-	// quickly without locking out web clients
-	lock sync.RWMutex
-}
-
-// This struct represents the configuration for the scoreboard.
-// Namely, the timeouts for checking host's services and ICMP, etc.
-type ScoreboardConfig struct {
-	// Config option that represents whether the scoreboard should
-	// ICMP test Hosts
-	pingHosts bool
-
-	// Config option that signifies the duration to wait before
-	// trying to ping all the hosts defined in the Scoreboard State.
-	TimeBetweenPingChecks time.Duration
-
-	// The duration to wait on hosts to respond to this programs
-	// Ping requests
-	PingTimeout time.Duration
-
-	// The duration to wait before trying to check the services
-	// as they are defined in the Scoreboard State.
-	TimeBetweenServiceChecks time.Duration
-
-	// The duration to wait for all services (not ICMP) to
-	// respond to this program.
-	ServiceTimeout time.Duration
-}
-
-// Struct to hold an update to a service held by ScoreboardState
-type ServiceUpdate struct {
-	// The IP of the host who's service update this is for.
-	// This is used as a unique identifier to identify hosts.
-	Ip string
-
-	// If true, this ServiceUpdate contains data on an update to a service,
-	// otherwise, this is a ICMP update report.
-	ServiceUpdate bool
-
-	// Flag to represent whether the Service is up, or if ServiceUpdate is
-	// false, this flag represents if ICMP is up for the remote host
-	IsUp bool
-
-	// This variable contains the port
-	// that holds a service. This is used to uniquely identify
-	// services contained within hosts for the Scoreboard State Updater
-	ServicePort string
-}
-
-// Struct to represent a Host that contains Services
-type Host struct {
-	// The service(s) provided on the host
-	Services []Service
-
-	// The IP Address of a Host
-	Ip string
-
-	// A flag used to represent whether a Host is responding to ICMP
-	PingUp bool
-}
-
-// An individual Service that is contained by a Host
-type Service struct {
-	// The name of the Service this struct represents
-	Name string
-
-	// The Port that the Service is hosted on
-	Port string
-
-	// The String to write to the remote Service.
-	// This is optional and can be an empty string
-	SendString string
-
-	// A Regular Expression that can match the expected
-	// response from the remote Service. This is optional
-	// and can be and empty string.
-	RegexResponse string
-
-	// The Layer 4 Protocol used to connect to the Service.
-	// I.E. 'tcp' or 'udp'
-	Protocol string
-
-	// Boolean flag to represent whether the service is currently up
-	IsUp bool
-}
-
-// Function to serve the `index.html` for the scoreboard.
-// Implements ServeHTTP for ScoreboardState
-func (sbd *ScoreboardState) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Establish a read-only lock to the scoreboard to retrieve data,
-	// then drop the lock after we have retrieved that data we need.
-	sbd.lock.RLock()
-	returnString, _ := json.MarshalIndent(sbd.Hosts, "", "  ")
-	sbd.lock.RUnlock() // Drop the lock
-
-	// Respond to the client
-	fmt.Fprintf(w, string(returnString))
-}
-
-// Helper function to return a new scoreboard
-func NewScoreboard() ScoreboardState {
-	return ScoreboardState{
-		make([]Host, 0),
-		ScoreboardConfig{
-			false,
-			time.Duration(0),
-			time.Duration(0),
-			time.Duration(0),
-			time.Duration(0),
-		},
-		sync.RWMutex{},
-	}
-}
-
-// A struct to represent the parsed yaml config. This type is
-// passed directly to yaml.v2 for parsing the physical
-// config file into active memory used to create ServiceState.Config
-type Config struct {
-	Services []map[string]string
-	Config   map[string]string
-}
-
-// An error that can arrise from parsing the config file and checking for
-// specific required configuration fields.
-type ConfigError string
-
-// Converts ConfigError to a String.
-// Implements Error for ConfigError
-func (err ConfigError) Error() string {
-	return string(err)
-}
 
 func init() {
 	// Determine the path to this executable
@@ -235,37 +83,43 @@ func main() {
 
 	var (
 		// Create a new scoreboard
-		scoreboard = NewScoreboard()
+		sbd = scoreboard.NewScoreboard()
 
 		// Make a buffered channel to write service updates over. These updates will get read by a thread
 		// that will write lock ScoreboardState
-		updateChannel = make(chan ServiceUpdate, 10)
+		updateChannel = make(chan scoreboard.ServiceUpdate, 10)
 	)
 
 	// Read and parse the config file
 	if config, err := initConfig(); err == nil { // Initialize the config
 
+		if err := config.validateConfig(); err != nil {
+			ilog.Println(err)
+			os.Exit(1)
+		}
+
 		// Parse the config to the scoreboard
-		if err := parseConfigToScoreboard(&config, &scoreboard); err != nil { // Failed to parse config
+		if err := parseConfigToScoreboard(&config, &sbd); err != nil { // Failed to parse config
 			ilog.Println("Failed to parse config:", err)
 			os.Exit(1)
 
 		} else { // Successfully parsed, now debug print the details
-			if scoreboard.config.pingHosts {
-				dlog.Println("Ping hosts:", boolToWord(scoreboard.config.pingHosts))
-				dlog.Println("Ping timeout:", scoreboard.config.PingTimeout)
-				dlog.Println("Time between ping checking hosts:", scoreboard.config.TimeBetweenPingChecks)
+			if sbd.Config.PingHosts {
+				dlog.Println("Ping hosts:", boolToWord(sbd.Config.PingHosts))
+				dlog.Println("Ping timeout:", sbd.Config.PingTimeout)
+				dlog.Println("Time between ping checking hosts:", sbd.Config.TimeBetweenPingChecks)
 			}
 
-			dlog.Println("Service timeout:", scoreboard.config.ServiceTimeout)
-			dlog.Println("Time between service checking hosts:", scoreboard.config.TimeBetweenServiceChecks)
+			dlog.Println("Service timeout:", sbd.Config.ServiceTimeout)
+			dlog.Println("Time between service checking hosts:", sbd.Config.TimeBetweenServiceChecks)
 		}
 
 	} else {
 		ilog.Println("Critical configuration file error encountered:", err)
 		ilog.Println("This might be because the Config file wasn't found. " +
 			"If this was the problem; run this program again with the " +
-			"-buildcfg flag or use the -c flag to specify your a different config!")
+			"-buildcfg flag to generate a config or use the -c flag to " +
+			"specify your a different config!")
 		os.Exit(1)
 
 	}
@@ -273,14 +127,14 @@ func main() {
 	// Test privileges for ICMP and opening port 80. Exit uncleanly if incorrect privileges are used.
 	testPrivileges()
 
-	if scoreboard.config.pingHosts { // The ping option was set
+	if sbd.Config.PingHosts { // The ping option was set
 
 		// Thread for pinging hosts. Results are shipped to the
 		// ScoreboardStateUpdater (defined below) as ServiceUpdates.
 		// We don't read-lock these threads with the Scoreboard State
 		// Because they should only be reading copies of the data that
 		// is stored in Scoreboard State.
-		go func(channel chan ServiceUpdate, services []Host, scoreboardConfig ScoreboardConfig) {
+		go func(channel chan scoreboard.ServiceUpdate, hosts []scoreboard.Host, scoreboardConfig scoreboard.Config) {
 
 			ilog.Println("Started the Ping Check Provider")
 
@@ -288,19 +142,19 @@ func main() {
 				// Sleep for the configured amount of time before trying to ping hosts
 				time.Sleep(scoreboardConfig.TimeBetweenPingChecks)
 
-				for _, service := range services {
-					// Asyncronously ping services so we don't wait full timeouts and can ping faster.
-					go pingHost(channel, service.Ip, scoreboardConfig.PingTimeout)
+				for _, host := range hosts {
+					// Asyncronously ping hosts so we don't wait full timeouts and can ping faster.
+					go host.PingHost(channel, scoreboardConfig.PingTimeout)
 				}
 			}
-		}(updateChannel, scoreboard.Hosts, scoreboard.config)
+		}(updateChannel, sbd.Hosts, sbd.Config)
 	}
 
 	// Thread for querying services. Results are shipped to the
 	// ScoreboardStateUpdater as ServiceUpdates
 	// We don't read-lock these threads because they should only be handling
 	// copies of the data that is in the Scoreboard State, not the actual data.
-	go func(channel chan ServiceUpdate, hosts []Host, config ScoreboardConfig) {
+	go func(channel chan scoreboard.ServiceUpdate, hosts []scoreboard.Host, config scoreboard.Config) {
 
 		ilog.Println("Started the Host Check Provider")
 
@@ -309,343 +163,42 @@ func main() {
 			time.Sleep(config.TimeBetweenServiceChecks)
 
 			for _, host := range hosts { // Check each host
-				for i := range host.Services { // Check each service
+				for _, service := range host.Services { // Check each service
 					// Asyncronously check services so we can check a lot of them
 					// and don't have to wait on service timeout durations
 					// which might be lengthy.
-					go checkService(channel, host.Ip, host.Services[i], config.ServiceTimeout)
+					go service.CheckService(channel, host.Ip, config.ServiceTimeout)
 				}
 			}
 		}
-	}(updateChannel, scoreboard.Hosts, scoreboard.config)
+	}(updateChannel, sbd.Hosts, sbd.Config)
 
 	// Start the scoreboardStateUpdater to update the scoreboard with
 	// ServiceUpdates
-	go scoreboardStateUpdater(updateChannel, &scoreboard)
+	go func(updates chan scoreboard.ServiceUpdate) {
+
+		ilog.Println("Started the Service State Updater")
+		output := make(chan string)
+		go sbd.StateUpdater(updateChannel, output)
+
+		for {
+			select {
+			case message := <-output:
+				dlog.Println(message)
+			default:
+				time.Sleep(1 * time.Second)
+			}
+		}
+
+	}(updateChannel)
 
 	// Register '/' with ScoreboardState
-	http.Handle("/", &scoreboard)
+	http.Handle("/", &sbd)
 
 	ilog.Println("Started Webserver")
 
 	// Start the webserver and serve content
 	http.ListenAndServe(":80", nil)
-}
-
-// This function checks a single service in the predefined
-// manner contained in the Service type.
-func checkService(updateChannel chan ServiceUpdate, ip string, service Service, serviceTimeout time.Duration) {
-	serviceUp := false
-
-	byteBufferTemplate := make([]byte, 1024)
-	if conn, err := net.DialTimeout(service.Protocol,
-		fmt.Sprintf("%v:%v", ip, service.Port), serviceTimeout); err == nil {
-
-		stringToSend := fmt.Sprint(service.SendString)
-		regexToMatch := fmt.Sprint(service.RegexResponse)
-
-		conn.SetDeadline(time.Now().Add(serviceTimeout))
-
-		if len(stringToSend) > 0 {
-			io.Copy(conn, strings.NewReader(stringToSend)) // Write what we need to write.
-		}
-
-		// No sense of even bothering to read the response if we aren't
-		// going to do anything with it.
-		if len(regexToMatch) > 0 {
-			buffer := bytes.NewBuffer(byteBufferTemplate)
-			io.Copy(buffer, conn) // Read the response
-			serviceUp, _ = regexp.Match(regexToMatch, buffer.Bytes())
-		} else {
-			serviceUp = true
-		}
-
-		conn.Close()
-	}
-
-	// Write the service update
-	updateChannel <- ServiceUpdate{
-		ip,
-		true,
-		serviceUp,
-		service.Port,
-	}
-}
-
-// Function to ping a host at an IP. Results are shipped as ServiceUpdates through
-// updateChannel. This function gives the remote host three chances to respond.
-// As long as one response is received, the host is marked as up.
-func pingHost(updateChannel chan ServiceUpdate, hostToPing string, pingTimeout time.Duration) {
-	pingSuccess := false
-
-	if pinger, err := ping.NewPinger(hostToPing); err == nil {
-		pinger.Timeout = pingTimeout
-		pinger.SetPrivileged(true)
-		pinger.Count = 3
-		pinger.Run() // Run the pinger
-
-		stats := pinger.Statistics() // Get the statistics for the ping from the pinger
-
-		pingSuccess = stats.PacketsRecv != 0 // Test if packets were received
-	}
-
-	updateChannel <- ServiceUpdate{
-		hostToPing,
-		false,       // This is an ICMP update
-		pingSuccess, // Whether the ping was successful
-		"",          // Set this to an empty string.
-	}
-}
-
-// Thread to read service updates and write the updates to ScoreboardState. We do this so
-// we don't have to give every status checking thread the ability to
-// RW lock the ScoreboardState. This lets us test services without locking.
-// This function read locks for determining if an update should be applied to the
-// Scoreboard State. If an update needs to be applied, the function drops its read lock
-// and establishes a write lock to update the data. The write lock is maintained for as long as there
-// are service updates that need to be analyzed. If no write lock is established, the function maintains
-// it's read lock as long as there are service updates that need to be analyzed.
-//
-// The end goal of this complex locking is to minimize the time spent holding a
-// write lock. however, once this function has establish a write lock,
-// don't drop it because it might need to be re-established nano-seconds later.
-// This function read locks for safety reasons.
-func scoreboardStateUpdater(updateChannel chan ServiceUpdate, sbd *ScoreboardState) {
-
-	ilog.Println("Started the Scoreboard State Updater")
-
-	// These two flags are mutually exclusive. One being set does not rely on the other
-	// which is why we have two of them, instead of expressing their logic with a single flag.
-	// This function will drop it's read lock when it's in a sleeping state,
-	// and only establishes a read lock when needing to find data that might be
-	// changed, and only then establishing a write lock **if** that data needs to be
-	// changed. A write lock or a read lock is kept until there is no more
-	// data to be parsed through.
-	var (
-		isWriteLocked = false // Flag to hold whether we already have a lock or not.
-		isReadLocked  = false // Flag to hold whether we have a read lock.
-	)
-
-	for {
-		// A service update that we are waiting for
-		var update ServiceUpdate
-
-		// Test for there being another service update on the line
-		select {
-		case update = <-updateChannel: // There is another update on the line
-
-			// Read-Lock to be safe.
-			if !isWriteLocked && !isReadLocked {
-				sbd.lock.RLock()
-				isReadLocked = true
-			}
-
-			// Interate down to the Service or Host that needs to be updated
-			for indexOfHosts, host := range sbd.Hosts {
-				if update.Ip == sbd.Hosts[indexOfHosts].Ip {
-					if update.ServiceUpdate { // Is the update a service update, or an ICMP update?
-						// It's a service update so iterate down to the service that needs to be updated.
-						for indexOfServices, service := range host.Services {
-							if service.Port == update.ServicePort {
-								// Decide if the update contradicts the current Scoreboard State.
-								// If it does, we need to establish a Write lock before changing
-								// the service state.
-								if sbd.Hosts[indexOfHosts].Services[indexOfServices].IsUp != update.IsUp {
-									if !isWriteLocked { // If we already have a RW lock, don't que another
-										sbd.lock.RUnlock() // Unlock our Read lock before Write Locking
-										isReadLocked = false
-										sbd.lock.Lock() // WRITE LOCK
-										isWriteLocked = true
-									}
-
-									// Debug print that we received a service update
-									dlog.Printf("Received a service update from %v:%v. The status "+
-										"is different, so updating the Scoreboard State. Status: %v", update.Ip,
-										sbd.Hosts[indexOfHosts].Services[indexOfServices].Port,
-										boolToWord(update.IsUp))
-
-									// Update that services state
-									sbd.Hosts[indexOfHosts].Services[indexOfServices].IsUp = update.IsUp
-								} else {
-									// Debug print that we received a service update
-									dlog.Printf("Received a service update from %v:%v. The status "+
-										"is not different, so not updating the Scoreboard State. Status: %v", update.Ip,
-										sbd.Hosts[indexOfHosts].Services[indexOfServices].Port,
-										boolToWord(update.IsUp))
-								}
-							}
-						}
-					} else {
-						// We are dealing with an ICMP update. We need to determine if the
-						// Scoreboard State needs to be updated.
-						if sbd.Hosts[indexOfHosts].PingUp != update.IsUp { // We need to establish a write lock
-							if !isWriteLocked { // If we already have a RW lock, don't que another
-								sbd.lock.RUnlock()
-								isReadLocked = false
-								sbd.lock.Lock() // WRITE LOCK
-								isWriteLocked = true
-							}
-
-							// Debug print the service update
-							dlog.Printf("Received a ping update from %v. The status is different, "+
-								"so updating the Scoreboard State. Status: %v", update.Ip,
-								boolToWord(update.IsUp))
-
-							sbd.Hosts[indexOfHosts].PingUp = update.IsUp
-						} else {
-							// Debug print the service update
-							dlog.Printf("Received a ping update from %v. The status is not different,"+
-								"so not updating the Scoreboard State. Status: %v", update.Ip,
-								boolToWord(update.IsUp))
-						}
-					}
-				}
-			}
-		default: // There is not another update on the line, so we'll wait for one
-			// If we have a write lock because we changed the ScoreboardState
-			// because of an ServiceUpdate, release the Write lock so clients
-			// can view content. Otherwise, we had a read lock that needs to
-			// be released because we don't need it any longer.
-			if isWriteLocked {
-				sbd.lock.Unlock()
-				isWriteLocked = false
-			} else if isReadLocked { // This isn't a else case because this default case might be ran quickly in succession
-				sbd.lock.RUnlock()
-				isReadLocked = false
-			}
-
-			// Wait 1 second, then check for ServiceUpdates again!
-			time.Sleep(1 * time.Second)
-		}
-	}
-
-}
-
-// This function converts the raw Config type to ScoreboardState.Config
-func parseConfigToScoreboard(config *Config, scoreboard *ScoreboardState) error {
-	// Determine if the user has set the ping option in the config file.
-	if config.Config["pingHosts"] != "yes" {
-		scoreboard.config.pingHosts = false // Deactivates all the ping functionality of the program
-
-	} else {
-		scoreboard.config.pingHosts = true // Activates the ping functionality of the program
-
-		// Determine the required pingInterval option from the config file
-		if pingDuration, err := time.ParseDuration(config.Config["pingInterval"]); err == nil {
-			scoreboard.config.TimeBetweenPingChecks = pingDuration
-
-		} else { // The option was not found
-			return ConfigError(fmt.Sprint("Failed to parse pingInterval from config file:", err))
-		}
-
-		// Determine the required pingTimeout option from the config file
-		if ptimeout, err := time.ParseDuration(config.Config["pingTimeout"]); err == nil {
-			scoreboard.config.PingTimeout = ptimeout
-
-		} else { // The option was not found
-			return ConfigError(fmt.Sprint("Failed to parse pingTimeout in config file:", err))
-		}
-	}
-
-	// Determine the required serviceInterval option from the config file
-	if serviceDuration, err := time.ParseDuration(config.Config["serviceInterval"]); err == nil {
-		scoreboard.config.TimeBetweenServiceChecks = serviceDuration
-
-	} else { // The option was not found
-		return ConfigError(fmt.Sprint("Failed to parse serviceInterval from config file:", err))
-	}
-
-	// Check for ServiceTimeout
-	if stimeout, err := time.ParseDuration(config.Config["serviceTimeout"]); err == nil {
-		scoreboard.config.ServiceTimeout = stimeout
-
-	} else {
-		return ConfigError(fmt.Sprint("Failed to parse serviceTimeout from config file:", err))
-	}
-
-	// Check that at least one service is defined in the config file
-	if len(config.Services) < 1 {
-		return ConfigError("There must be at least one service defined in the config file!")
-	}
-
-	// Create the Services and Hosts for the ScoreboardState
-	for _, mp := range config.Services {
-		newHostsIp := mp["ip"] // Use IP as a unique identifier for machines
-		createNewHost := true
-
-		// This is the service that we need to add to the scoreboard,
-		// the only question left is if the host that this service belongs to
-		// is already created or if we need to create it.
-		newService := Service{
-			mp["service"],
-			mp["port"],
-			mp["send_string"],
-			mp["response_regex"],
-			mp["connection_protocol"],
-			true,
-		}
-
-		// Search for a host that contains the current services IP, if it's not found
-		// We'll create a new Host with the newService already further added below.
-		for i := range scoreboard.Hosts {
-
-			// A host containing this IP already exists, so we just need add our
-			// newService to it :D
-			if newHostsIp == scoreboard.Hosts[i].Ip { // There are more services to test from this machine
-				createNewHost = false
-				scoreboard.Hosts[i].Services = append(scoreboard.Hosts[i].Services, newService)
-				break
-			}
-		}
-
-		// Test the regex for services and error if the regex parser can't handle it.
-		if _, err := regexp.Match(mp["response_regex"], []byte("")); err != nil {
-			return ConfigError(fmt.Sprintf("invalid regular expression: %v \nFor more "+
-				"information see https://github.com/google/re2/wiki/Syntax", err))
-		}
-
-		// If the above loop got this far, then we are looking at a Host we haven't seen yet,
-		// so add it here and it's Service
-		if createNewHost {
-			scoreboard.Hosts = append(scoreboard.Hosts, Host{
-				[]Service{newService},
-				newHostsIp,
-				true,
-			})
-		}
-	}
-
-	return nil
-}
-
-// This function simple Opens the config.yaml file and parses it
-// into the Config type, then returns that type.
-func initConfig() (Config, error) {
-	var (
-		configFile *os.File
-		config     Config
-	)
-
-	// Test each config file option.
-	if f, err := os.Open(defaultConfigFileLocation); err == nil {
-		configFile = f
-	} else if f, err := os.Open(defaultConfigFileName); err == nil {
-		configFile = f
-	} else {
-		return config, err
-	}
-
-	defer configFile.Close()
-
-	dlog.Println("Opened config:", configFile.Name())
-
-	// Attempt to decode the config into a go type
-	yamlDecoder := yaml.NewDecoder(configFile)
-	if err := yamlDecoder.Decode(&config); err == nil {
-		return config, nil
-	} else {
-		return config, err
-	}
 }
 
 // This function tests privileges and initiates an unclean exit if the
@@ -693,7 +246,7 @@ LICENSE:
 	This software is distributed as Free and Open Source Software.
 
 AUTHOR:
-	This program was created with love by Michael Mitchell for the
+	This program was created by Michael Mitchell for the
 	University of West Florida Cyber Security Club`)
 }
 
