@@ -139,13 +139,13 @@ func main() {
 			ilog.Println("Started the Ping Check Provider")
 
 			for {
-				// Sleep for the configured amount of time before trying to ping hosts
-				time.Sleep(scoreboardConfig.TimeBetweenPingChecks)
-
-				for _, host := range hosts {
+				for i := range hosts {
 					// Asyncronously ping hosts so we don't wait full timeouts and can ping faster.
-					go host.PingHost(channel, scoreboardConfig.PingTimeout)
+					go hosts[i].PingHost(channel, scoreboardConfig.PingTimeout)
 				}
+
+				// Sleep before testing these hosts again
+				time.Sleep(scoreboardConfig.TimeBetweenPingChecks)
 			}
 		}(updateChannel, sbd.Hosts, sbd.Config)
 	}
@@ -159,17 +159,19 @@ func main() {
 		ilog.Println("Started the Host Check Provider")
 
 		for {
-			// Wait the configured amount of time before initiating threads to query services.
-			time.Sleep(config.TimeBetweenServiceChecks)
-
-			for _, host := range hosts { // Check each host
-				for _, service := range host.Services { // Check each service
+			// Go ahead and test these bad guys before going to sleep.
+			for hostIndex := range hosts { // Check each host
+				for serviceIndex := range hosts[hostIndex].Services { // Check each service
 					// Asyncronously check services so we can check a lot of them
 					// and don't have to wait on service timeout durations
 					// which might be lengthy.
-					go service.CheckService(channel, host.Ip, config.ServiceTimeout)
+					go hosts[hostIndex].Services[serviceIndex].CheckService(channel,
+						hosts[hostIndex].Ip, config.ServiceTimeout)
 				}
 			}
+
+			// Sleep before testing these services again.
+			time.Sleep(config.TimeBetweenServiceChecks)
 		}
 	}(updateChannel, sbd.Hosts, sbd.Config)
 
@@ -182,14 +184,8 @@ func main() {
 		go sbd.StateUpdater(updateChannel, output)
 
 		for {
-			select {
-			case message := <-output:
-				dlog.Println(message)
-			default:
-				time.Sleep(1 * time.Second)
-			}
+			dlog.Println(<- output) // Print as fast as you can, and wait for data when you can't
 		}
-
 	}(updateChannel)
 
 	// Register '/' with ScoreboardState

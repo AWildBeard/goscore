@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"os/exec"
 	"regexp"
@@ -84,6 +83,8 @@ func (service *Service) CheckService(updateChannel chan ServiceUpdate, ip string
 			regexToMatch = fmt.Sprint(service.Response)
 			sig          = make(chan bool, 1)
 			cmd          *exec.Cmd
+			stdout = bytes.Buffer{}
+			stderr = bytes.Buffer{}
 		)
 
 		if len(command) > 1 {
@@ -92,15 +93,12 @@ func (service *Service) CheckService(updateChannel chan ServiceUpdate, ip string
 			cmd = exec.Command(command[0])
 		}
 
-		stdout, _ := cmd.StdoutPipe()
-		stderr, _ := cmd.StderrPipe()
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
 
 		cmd.Start()
 
-		go func() {
-
-			time.Sleep(timeout)
-
+		time.AfterFunc(timeout, func() {
 			select {
 			case <-sig:
 				return
@@ -109,26 +107,19 @@ func (service *Service) CheckService(updateChannel chan ServiceUpdate, ip string
 					syscall.Kill(cmd.Process.Pid, syscall.SIGKILL)
 				}
 			}
-
-		}()
+		})
 
 		cmd.Wait()
 		sig <- true
 
-		stdoutBytes, _ := ioutil.ReadAll(stdout)
-		stderrBytes, _ := ioutil.ReadAll(stderr)
-		stdout.Close()
-		stderr.Close()
-		foundInStdout, _ := regexp.Match(regexToMatch, stdoutBytes)
-		foundInStderr, _ := regexp.Match(regexToMatch, stderrBytes)
+		foundInStdout, _ := regexp.Match(regexToMatch, stdout.Bytes())
+		foundInStderr, _ := regexp.Match(regexToMatch, stderr.Bytes())
 
 		serviceUp = foundInStdout || foundInStderr
-
 	} else {
 		if conn, err := net.DialTimeout(service.Protocol,
 			fmt.Sprintf("%v:%v", ip, service.Port), timeout); err == nil {
 
-			byteBufferTemplate := make([]byte, 1024)
 			stringToSend := fmt.Sprint(service.Command)
 			regexToMatch := fmt.Sprint(service.Response)
 
@@ -141,8 +132,8 @@ func (service *Service) CheckService(updateChannel chan ServiceUpdate, ip string
 			// No sense of even bothering to read the response if we aren't
 			// going to do anything with it.
 			if len(regexToMatch) > 0 {
-				buffer := bytes.NewBuffer(byteBufferTemplate)
-				io.Copy(buffer, conn) // Read the response
+				buffer := bytes.Buffer{}
+				io.Copy(&buffer, conn) // Read the response
 				serviceUp, _ = regexp.Match(regexToMatch, buffer.Bytes())
 			} else {
 				serviceUp = true

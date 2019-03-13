@@ -145,7 +145,7 @@ hosts:
         port: "25"             # in 'tcp' mode, 'port:' is required
         protocol: "tcp"        # Required
         # Only test the response from the service (banner grab)
-        response: "250"
+        response: "220"
 
   ## Manual HTTP example ##
   - host: "CentOS web server" # Required
@@ -155,7 +155,7 @@ hosts:
         port: "80"            # in 'tcp' mode, 'port:' is required
         protocol: "tcp"       # Required
         # Send a string to the service
-        command: "GET / HTTP/1.1 \r\n\r\n"
+        command: "GET / HTTP/1.0 \r\n\r\n"
         # Match it's response
         response: "200 OK"
 
