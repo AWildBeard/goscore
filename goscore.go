@@ -93,13 +93,13 @@ func main() {
 	// Read and parse the config file
 	if config, err := initConfig(); err == nil { // Initialize the config
 
-		if err := config.validateConfig(); err != nil {
+		if err := config.ValidateConfig(); err != nil {
 			ilog.Println(err)
 			os.Exit(1)
 		}
 
 		// Parse the config to the scoreboard
-		if err := parseConfigToScoreboard(&config, &sbd); err != nil { // Failed to parse config
+		if err := ParseConfigToScoreboard(&config, &sbd); err != nil { // Failed to parse config
 			ilog.Println("Failed to parse config:", err)
 			os.Exit(1)
 

@@ -70,11 +70,11 @@ func initConfig() (Config, error) {
 	}
 }
 
-func (config *Config) validateConfig() error {
+func (config *Config) ValidateConfig() error {
 	// Test for pingHosts
 	if len(config.Config["pingHosts"]) == 0 {
 		return ConfigError("You must include the 'pingHosts:' field under 'config:'")
-	} else { // It's there so test pingHost related fields
+	} else if config.Config["pingHosts"] == "yes" { // It's there so test pingHost related fields
 		if len(config.Config["pingInterval"]) == 0 {
 			return ConfigError("You must define the 'pingInterval:' field under 'config:'")
 		}
@@ -141,7 +141,7 @@ func (config *Config) validateConfig() error {
 }
 
 // This function converts the raw Config type to ScoreboardState.Config
-func parseConfigToScoreboard(config *Config, scoreboard *scoreboard.State) error {
+func ParseConfigToScoreboard(config *Config, scoreboard *scoreboard.State) error {
 	// Determine if the user has set the ping option in the config file.
 	if config.Config["pingHosts"] != "yes" {
 		scoreboard.Config.PingHosts = false // Deactivates all the ping functionality of the program
