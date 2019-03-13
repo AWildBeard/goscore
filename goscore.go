@@ -184,7 +184,7 @@ func main() {
 		go sbd.StateUpdater(updateChannel, output)
 
 		for {
-			dlog.Println(<- output) // Print as fast as you can, and wait for data when you can't
+			dlog.Println(<-output) // Print as fast as you can, and wait for data when you can't
 		}
 	}(updateChannel)
 

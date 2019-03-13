@@ -7,18 +7,18 @@ import (
 
 func TestValidateConfig(t *testing.T) {
 	type ValidateConfigTestTable struct {
-		Configs []Config
+		Configs           []Config
 		ConfigShouldError []bool
 	}
 
-	testTable := ValidateConfigTestTable {
-		[]Config {
+	testTable := ValidateConfigTestTable{
+		[]Config{
 			{
-				[]scoreboard.Host {
-					scoreboard.Host{
+				[]scoreboard.Host{
+					{
 						"google",
 						[]scoreboard.Service{
-							scoreboard.Service{
+							{
 								"http",
 								"",
 								"wget -o /dev/null www.google.com",
@@ -26,7 +26,7 @@ func TestValidateConfig(t *testing.T) {
 								"host-command",
 								false,
 							},
-							scoreboard.Service{
+							{
 								"dns",
 								"",
 								"dig www.google.com @8.8.8.8",
@@ -34,7 +34,7 @@ func TestValidateConfig(t *testing.T) {
 								"host-command",
 								false,
 							},
-							scoreboard.Service {
+							{
 								"drive",
 								"80",
 								"GET / HTTP/1.0\r\n\r\n",
@@ -48,20 +48,19 @@ func TestValidateConfig(t *testing.T) {
 					},
 				},
 				map[string]string{
-					"pingHosts": "yes",
-					"pingInterval": "60s",
-					"pingTimeout": "7s",
+					"pingHosts":       "yes",
+					"pingInterval":    "60s",
+					"pingTimeout":     "7s",
 					"serviceInterval": "120s",
-					"serviceTimeout": "10s",
+					"serviceTimeout":  "10s",
 				},
-
 			},
 			{
-				[]scoreboard.Host {
-					scoreboard.Host {
+				[]scoreboard.Host{
+					{
 						"cloudflare",
-						[]scoreboard.Service {
-							scoreboard.Service{
+						[]scoreboard.Service{
+							{
 								"dns",
 								"",
 								"dig one.one.one.one @1.1.1.1",
@@ -69,7 +68,7 @@ func TestValidateConfig(t *testing.T) {
 								"",
 								false,
 							},
-							scoreboard.Service{
+							{
 								"",
 								"",
 								"dig one.one.one.one @1.1.1.1",
@@ -81,10 +80,10 @@ func TestValidateConfig(t *testing.T) {
 						"1.1.1.1",
 						false,
 					},
-					scoreboard.Host {
+					{
 						"quad 9",
-						[]scoreboard.Service {
-							scoreboard.Service {
+						[]scoreboard.Service{
+							{
 								"dns",
 								"",
 								"dig www.google.com @ 9.9.9.9",
@@ -97,16 +96,16 @@ func TestValidateConfig(t *testing.T) {
 						false,
 					},
 				},
-				map[string]string {
+				map[string]string{
 					"serviceInterval": "120s",
 				},
 			},
 			{
-				[]scoreboard.Host {
-					scoreboard.Host {
+				[]scoreboard.Host{
+					{
 						"Quad 9",
-						[]scoreboard.Service {
-							scoreboard.Service {
+						[]scoreboard.Service{
+							{
 								"dns",
 								"",
 								"dig www.google.com @ 9.9.9.9",
@@ -119,14 +118,14 @@ func TestValidateConfig(t *testing.T) {
 						false,
 					},
 				},
-				map[string]string {
-					"pingHosts": "no",
+				map[string]string{
+					"pingHosts":       "no",
 					"serviceInterval": "120s",
-					"serviceTimeout": "10s",
+					"serviceTimeout":  "10s",
 				},
 			},
 		},
-		[]bool {
+		[]bool{
 			false,
 			true,
 			false,
@@ -135,8 +134,8 @@ func TestValidateConfig(t *testing.T) {
 
 	// Test that our setup is mildly correct
 	if len(testTable.Configs) != len(testTable.ConfigShouldError) {
-		t.Fatalf("Test Table not setup correctly: Length of " +
-			"Configs and ConfigShouldError should match! " +
+		t.Fatalf("Test Table not setup correctly: Length of "+
+			"Configs and ConfigShouldError should match! "+
 			"len(Configs): %d len(ConfigShouldError): %d",
 			len(testTable.Configs), len(testTable.ConfigShouldError))
 
@@ -145,14 +144,14 @@ func TestValidateConfig(t *testing.T) {
 
 	// Test the configs
 	for i := range testTable.Configs {
-		if err := testTable.Configs[i].ValidateConfig() ; err == nil {
+		if err := testTable.Configs[i].ValidateConfig(); err == nil {
 			if testTable.ConfigShouldError[i] {
 				t.Errorf("Config %d did *not* error when it should have", i)
 			} else {
 				t.Logf("Config %d passed!", i)
 			}
 		} else {
-			if ! testTable.ConfigShouldError[i] {
+			if !testTable.ConfigShouldError[i] {
 				t.Errorf("Config %d errored when it should not have: %v", i, err)
 			} else {
 				t.Logf("Config %d passed!", i)
