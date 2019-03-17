@@ -182,7 +182,7 @@ func ParseConfigToScoreboard(config *Config, scoreboard *scoreboard.State) error
 		return ConfigError(fmt.Sprint("Failed to parse serviceTimeout from config file:", err))
 	}
 
-	if configDefaultServiceState := config.Config["defaultState"] ; configDefaultServiceState != "" {
+	if configDefaultServiceState := config.Config["defaultState"]; configDefaultServiceState != "" {
 		if configDefaultServiceState == "up" {
 			scoreboard.Config.DefaultServiceState = true
 		} else {
@@ -192,7 +192,7 @@ func ParseConfigToScoreboard(config *Config, scoreboard *scoreboard.State) error
 		return ConfigError(fmt.Sprint("Failed to parse defaultState from 'config:' section!"))
 	}
 
-	if configCompetitionName := config.Config["competitionName"] ; configCompetitionName != "" {
+	if configCompetitionName := config.Config["competitionName"]; configCompetitionName != "" {
 		scoreboard.Name = configCompetitionName
 	} else {
 		return ConfigError(fmt.Sprint("Failed to parse competitionName from 'config:' section!"))

@@ -34,13 +34,13 @@ func TestPingHost(t *testing.T) {
 	}
 
 	type PingHostTestTable struct {
-		Scoreboards           []State
+		Scoreboards       []State
 		ConfigShouldError []bool
 	}
 
 	testTable := PingHostTestTable{
 		[]State{
-			State {
+			{
 				[]Host{
 					{
 						"google",
@@ -74,7 +74,7 @@ func TestPingHost(t *testing.T) {
 						false,
 					},
 				},
-				Config {
+				Config{
 					true,
 					time.Duration(60 * time.Second),
 					time.Duration(7 * time.Second),
@@ -101,7 +101,7 @@ func TestPingHost(t *testing.T) {
 						false,
 					},
 				},
-				Config {
+				Config{
 					true,
 					time.Duration(60 * time.Second),
 					time.Duration(7 * time.Second),
@@ -113,7 +113,7 @@ func TestPingHost(t *testing.T) {
 		},
 		[]bool{
 			false,
-            false,
+			false,
 		},
 	}
 
@@ -140,7 +140,7 @@ func TestPingHost(t *testing.T) {
 
 		time.AfterFunc(durationToWait, func() {
 			if count != expectedNumUpdates {
-				t.Fatalf("Did not get expected number of " +
+				t.Fatalf("Did not get expected number of "+
 					"ping updates! Expected %d got %d",
 					expectedNumUpdates, count)
 				t.FailNow()
@@ -153,17 +153,16 @@ func TestPingHost(t *testing.T) {
 
 		for {
 			select {
-			case <- termChannel:
+			case <-termChannel:
 				return
-			case update := <- inputChannel:
+			case update := <-inputChannel:
 				if update.IsUp {
 					count++
 				}
 			}
 		}
 
-	} (outputChannel, termChan)
-
+	}(outputChannel, termChan)
 
 	for i := range testTable.Scoreboards {
 		sbd := testTable.Scoreboards[i]
@@ -175,5 +174,5 @@ func TestPingHost(t *testing.T) {
 		}
 	}
 
-	<- termChan
+	<-termChan
 }

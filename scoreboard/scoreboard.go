@@ -122,6 +122,7 @@ h2 {
 </html>
 `
 )
+
 // Struct to represent the scoreboard's state. This type holds
 // The hosts that are scored and the config by witch to score them.
 // There is also a RW lock to control reading and writing to this
@@ -222,15 +223,15 @@ func (sbd *State) StartScoring() {
 // Implements ServeHTTP for ScoreboardState
 func (sbd *State) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
-	if tmplt, err := template.New("scoreboard").Parse(standardScoreboardDoc) ; err == nil {
+	if tmplt, err := template.New("scoreboard").Parse(standardScoreboardDoc); err == nil {
 		// Establish a read-only lock to the scoreboard to retrieve data,
 		// then drop the lock after we have retrieved that data we need.
 		sbd.lock.RLock()
 		data := struct {
-			Title string
-			Hosts []Host
+			Title     string
+			Hosts     []Host
 			PingHosts bool
-		} {
+		}{
 			sbd.Name,
 			sbd.Hosts,
 			sbd.Config.PingHosts,
@@ -238,7 +239,7 @@ func (sbd *State) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		sbd.lock.RUnlock() // Drop the lock
 
 		// Respond to the client
-		if err := tmplt.Execute(w, data) ; err != nil {
+		if err := tmplt.Execute(w, data); err != nil {
 			fmt.Println("ERRORED ON HTML TEMPLATE EXECUTE:", err)
 		}
 	} else {
@@ -322,16 +323,16 @@ func (sbd *State) StateUpdater(updateChannel chan ServiceUpdate, output chan str
 									service.SetUp(update.IsUp)
 
 									// Debug that we received a service update
-									output <- fmt.Sprintf("Received a service update for %v on %v.\n" +
-										"\tStatus: %v -> Needed to update scoreboard\n" +
+									output <- fmt.Sprintf("Received a service update for %v on %v.\n"+
+										"\tStatus: %v -> Needed to update scoreboard\n"+
 										"\tUptime: %v, Downtime: %v", service.Name,
 										host.Name, update.IsUp,
 										service.GetUptime(), service.GetDowntime())
 
 								} else {
 									// Debug that we received a service update
-									output <- fmt.Sprintf("Received a service update for %v on %v.\n" +
-										"\tStatus: %v -> Didn't need to update scoreboard\n" +
+									output <- fmt.Sprintf("Received a service update for %v on %v.\n"+
+										"\tStatus: %v -> Didn't need to update scoreboard\n"+
 										"\tUptime: %v, Downtime: %v", service.Name,
 										host.Name, update.IsUp,
 										service.GetUptime(), service.GetDowntime())
@@ -342,7 +343,6 @@ func (sbd *State) StateUpdater(updateChannel chan ServiceUpdate, output chan str
 							}
 						}
 					} else {
-
 
 						// We are dealing with an ICMP update. We need to determine if the
 						// Scoreboard State needs to be updated.
@@ -357,16 +357,16 @@ func (sbd *State) StateUpdater(updateChannel chan ServiceUpdate, output chan str
 							host.SetUp(update.IsUp)
 
 							// Debug print the service update
-							output <- fmt.Sprintf("Received a ping update for %v on %v.\n" +
-								"\tStatus: %v -> Needed to update scoreboard.\n" +
+							output <- fmt.Sprintf("Received a ping update for %v on %v.\n"+
+								"\tStatus: %v -> Needed to update scoreboard.\n"+
 								"\tUptime: %v, Downtime: %v", host.Ip,
 								host.Name, host.isUp,
 								host.GetUptime(), host.GetDowntime())
 
 						} else {
 							// Debug print the service update
-							output <- fmt.Sprintf("Received a ping update for %v on %v.\n" +
-								"\tStatus: %v -> Didn't need to update scoreboard.\n" +
+							output <- fmt.Sprintf("Received a ping update for %v on %v.\n"+
+								"\tStatus: %v -> Didn't need to update scoreboard.\n"+
 								"\tUptime: %v, Downtime: %v", host.Ip,
 								host.Name, host.isUp,
 								host.GetUptime(), host.GetDowntime())

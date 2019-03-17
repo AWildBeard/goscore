@@ -39,7 +39,6 @@ type Host struct {
 	downtime time.Duration
 
 	previousUpdateTime time.Time
-
 }
 
 func (host *Host) IsUp() bool {
@@ -71,7 +70,7 @@ func (host *Host) GetUptime() time.Duration {
 }
 
 func (host *Host) GetDowntime() time.Duration {
-	if ! host.isUp {
+	if !host.isUp {
 		return host.downtime + time.Now().Sub(host.previousUpdateTime)
 	}
 

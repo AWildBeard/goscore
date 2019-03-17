@@ -58,7 +58,6 @@ type Service struct {
 	downtime time.Duration
 
 	previousUpdateTime time.Time
-
 }
 
 // Struct to hold an update to a service held by ScoreboardState
@@ -86,7 +85,7 @@ func (service *Service) IsUp() bool {
 }
 
 func (service *Service) SetUp(state bool) {
-	if service.isUp	!= state {
+	if service.isUp != state {
 		now := time.Now()
 		service.isUp = state
 
@@ -110,7 +109,7 @@ func (service *Service) GetUptime() time.Duration {
 }
 
 func (service *Service) GetDowntime() time.Duration {
-	if ! service.isUp {
+	if !service.isUp {
 		return service.downtime + time.Now().Sub(service.previousUpdateTime)
 	}
 
@@ -128,8 +127,8 @@ func (service *Service) CheckService(updateChannel chan ServiceUpdate, ip string
 			regexToMatch = fmt.Sprint(service.Response)
 			sig          = make(chan bool, 1)
 			cmd          *exec.Cmd
-			stdout = bytes.Buffer{}
-			stderr = bytes.Buffer{}
+			stdout       = bytes.Buffer{}
+			stderr       = bytes.Buffer{}
 		)
 
 		if len(command) > 1 {
