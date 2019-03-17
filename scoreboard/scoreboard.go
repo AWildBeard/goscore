@@ -15,13 +15,113 @@
 package scoreboard
 
 import (
-	"encoding/json"
 	"fmt"
+	"html/template"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 )
 
+const (
+	standardScoreboardDoc = `<!DOCTYPE HTML>
+<html>
+	<head>
+		<meta charset="UTF-8">
+		<title>{{ .Title }}</title>
+		<style>
+body {
+  display: flex;
+  font-family: arial, serif;
+  justify-content: center;
+  background-color: #133f7c;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  insets: 0;
+}
+h2 {
+  margin: 5vh 0 5vh 0;
+  display: flex;
+  flex: 0;
+  justify-content: center;
+}
+.serviceTable {
+  height: calc(100vh - 4vh);
+  padding: 0 10vw 0 10vw;
+  display: flex;
+  justify-content: flex-start;
+  margin: 2vh 0 2vh 0;
+  flex-direction: column;
+  background-color: white;
+  border-radius: 2vmin;
+  box-shadow: 0 0 1vmin #133f7c;
+}
+.footer {
+  display: flex;
+  flex: 2;
+  align-self: flex-end;
+  width: 100%;
+  justify-content: center;
+  font-size: 10pt;
+}
+.footer i {
+  align-self: flex-end;
+  margin: 3vh 0 3vh 0;
+}
+.serviceTable table {
+  display: flex;
+  flex: 1;
+  justify-content: center;
+  border-collapse: collapse;
+  border: none;
+}
+.serviceTable th {
+  border: solid thin black;
+  background-color: black;
+  color: white;
+  padding: 0.5vmax 3vmax 0.5vmax 3vmax;
+  vertical-align: middle;
+}
+.serviceTable td {
+  border: solid thin black;
+  vertical-align: top;
+  padding: 0.5vh 1vw;
+}
+.up {
+  background-color: green;
+}
+.down {
+  background-color: red;
+}
+		</style>
+	</head>
+	<body>
+		<div class="serviceTable">
+		<h2>{{.Title}} Scoreboard</h2>
+		<table>
+			<tr>
+				<th>Host</th>
+				<th>Service</th>
+				<th>State</th>
+			</tr>
+			{{ $pingHosts := .PingHosts }} {{ range $hostIndex, $host := .Hosts }} {{ range $serviceIndex, $service := index $host.Services }} <tr>
+				<td>{{ $host.Name }}</td>
+				<td>{{ $service.Name }}</td> {{ if $pingHosts }} {{ if and $host.IsUp $service.IsUp }}
+				<td class="up">Online</td> {{ else }}
+				<td class="down">Offline</td> {{ end }} {{ else }} {{ if $service.IsUp }}
+				<td class="up">Online</td> {{ else }}
+				<td class="down">Offline</td> {{ end }} {{ end }}
+			</tr> {{ end }} {{ end }}
+		</table>
+		<div class="footer">
+		<i>Created by Michael Mitchell for the UWF CyberSecurity Club</i>
+		</div>
+		</div>
+	</body>
+</html>
+`
+)
 // Struct to represent the scoreboard's state. This type holds
 // The hosts that are scored and the config by witch to score them.
 // There is also a RW lock to control reading and writing to this
@@ -34,6 +134,9 @@ type State struct {
 	// Scoreboard specific config to dictate
 	// how to check services
 	Config Config
+
+	// The name of the competition. Used in the web interface.
+	Name string
 
 	// The RW lock that will allow updating the scoreboard
 	// quickly without locking out web clients
@@ -62,6 +165,22 @@ type Config struct {
 	// The duration to wait for all services (not ICMP) to
 	// respond to this program.
 	ServiceTimeout time.Duration
+
+	// The default service state for all services and hosts.
+	// If the user is wanting to test services that will all be up
+	// at the beginning of the CTF, setting this to true will give
+	// accurate uptimes and downtimes to that situation. If the user
+	// expects the services to be down at the beginning, setting this
+	// to false will give accurate uptimes and wontimes for that
+	// usecase.
+	DefaultServiceState bool
+}
+
+type UptimeTracking interface {
+	SetUp(state bool)
+	IsUp() bool
+	GetUptime() time.Duration
+	GetDowntime() time.Duration
 }
 
 // Helper function to return a new scoreboard
@@ -74,22 +193,58 @@ func NewScoreboard() State {
 			time.Duration(0),
 			time.Duration(0),
 			time.Duration(0),
+			true,
 		},
+		"",
 		sync.RWMutex{},
+	}
+}
+
+func (sbd *State) StartScoring() {
+	newTime := time.Now()
+
+	for hostIndex := range sbd.Hosts {
+		host := &sbd.Hosts[hostIndex]
+
+		host.previousUpdateTime = newTime
+		host.isUp = sbd.Config.DefaultServiceState
+
+		for serviceIndex := range host.Services {
+			service := &host.Services[serviceIndex]
+
+			service.previousUpdateTime = newTime
+			service.isUp = sbd.Config.DefaultServiceState
+		}
 	}
 }
 
 // Function to serve the `index.html` for the scoreboard.
 // Implements ServeHTTP for ScoreboardState
 func (sbd *State) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Establish a read-only lock to the scoreboard to retrieve data,
-	// then drop the lock after we have retrieved that data we need.
-	sbd.lock.RLock()
-	returnString, _ := json.MarshalIndent(sbd.Hosts, "", "  ")
-	sbd.lock.RUnlock() // Drop the lock
 
-	// Respond to the client
-	fmt.Fprintf(w, string(returnString))
+	if tmplt, err := template.New("scoreboard").Parse(standardScoreboardDoc) ; err == nil {
+		// Establish a read-only lock to the scoreboard to retrieve data,
+		// then drop the lock after we have retrieved that data we need.
+		sbd.lock.RLock()
+		data := struct {
+			Title string
+			Hosts []Host
+			PingHosts bool
+		} {
+			sbd.Name,
+			sbd.Hosts,
+			sbd.Config.PingHosts,
+		}
+		sbd.lock.RUnlock() // Drop the lock
+
+		// Respond to the client
+		if err := tmplt.Execute(w, data) ; err != nil {
+			fmt.Println("ERRORED ON HTML TEMPLATE EXECUTE:", err)
+		}
+	} else {
+		fmt.Println("ERRORED ON HTML TEMPLATE CREATION:", err)
+		os.Exit(1)
+	}
 }
 
 // Thread to read service updates and write the updates to ScoreboardState. We do this so
@@ -134,16 +289,28 @@ func (sbd *State) StateUpdater(updateChannel chan ServiceUpdate, output chan str
 			}
 
 			// Interate down to the Service or Host that needs to be updated
-			for indexOfHosts, host := range sbd.Hosts {
-				if update.Ip == sbd.Hosts[indexOfHosts].Ip {
+			for indexOfHosts := range sbd.Hosts {
+				// Get a reference to the host
+				host := &sbd.Hosts[indexOfHosts]
+
+				if update.Ip == host.Ip {
+					// Found the correct host
+
 					if update.ServiceUpdate { // Is the update a service update, or an ICMP update?
+
 						// It's a service update so iterate down to the service that needs to be updated.
-						for indexOfServices, service := range host.Services {
+						for indexOfServices := range host.Services {
+
+							// Get a reference to the service
+							service := &host.Services[indexOfServices]
+
 							if service.Name == update.ServiceName {
+								// Found the correct service
+
 								// Decide if the update contradicts the current Scoreboard State.
 								// If it does, we need to establish a Write lock before changing
 								// the service state.
-								if sbd.Hosts[indexOfHosts].Services[indexOfServices].IsUp != update.IsUp {
+								if service.isUp != update.IsUp {
 									if !isWriteLocked { // If we already have a RW lock, don't que another
 										sbd.lock.RUnlock() // Unlock our Read lock before Write Locking
 										isReadLocked = false
@@ -151,25 +318,35 @@ func (sbd *State) StateUpdater(updateChannel chan ServiceUpdate, output chan str
 										isWriteLocked = true
 									}
 
-									// Debug that we received a service update
-									output <- fmt.Sprintf("Received a service update for %v on %v. Status: %v. "+
-										"Updating Scoreboard", update.ServiceName,
-										sbd.Hosts[indexOfHosts].Name, update.IsUp)
-
 									// Update that services state
-									sbd.Hosts[indexOfHosts].Services[indexOfServices].IsUp = update.IsUp
+									service.SetUp(update.IsUp)
+
+									// Debug that we received a service update
+									output <- fmt.Sprintf("Received a service update for %v on %v.\n" +
+										"\tStatus: %v -> Needed to update scoreboard\n" +
+										"\tUptime: %v, Downtime: %v", service.Name,
+										host.Name, update.IsUp,
+										service.GetUptime(), service.GetDowntime())
+
 								} else {
 									// Debug that we received a service update
-									output <- fmt.Sprintf("Received a service update for %v on %v. Status: %v. "+
-										"Not Updating Scoreboard", update.ServiceName,
-										sbd.Hosts[indexOfHosts].Name, update.IsUp)
+									output <- fmt.Sprintf("Received a service update for %v on %v.\n" +
+										"\tStatus: %v -> Didn't need to update scoreboard\n" +
+										"\tUptime: %v, Downtime: %v", service.Name,
+										host.Name, update.IsUp,
+										service.GetUptime(), service.GetDowntime())
+
 								}
+
+								break // We found the correct service so stop searching
 							}
 						}
 					} else {
+
+
 						// We are dealing with an ICMP update. We need to determine if the
 						// Scoreboard State needs to be updated.
-						if sbd.Hosts[indexOfHosts].PingUp != update.IsUp { // We need to establish a write lock
+						if host.isUp != update.IsUp { // We need to establish a write lock
 							if !isWriteLocked { // If we already have a RW lock, don't que another
 								sbd.lock.RUnlock()
 								isReadLocked = false
@@ -177,19 +354,26 @@ func (sbd *State) StateUpdater(updateChannel chan ServiceUpdate, output chan str
 								isWriteLocked = true
 							}
 
-							// Debug print the service update
-							output <- fmt.Sprintf("Received a ping update for %v on %v. Status: %v. "+
-								"Updating Scoreboard", update.Ip,
-								sbd.Hosts[indexOfHosts].Name, update.IsUp)
+							host.SetUp(update.IsUp)
 
-							sbd.Hosts[indexOfHosts].PingUp = update.IsUp
+							// Debug print the service update
+							output <- fmt.Sprintf("Received a ping update for %v on %v.\n" +
+								"\tStatus: %v -> Needed to update scoreboard.\n" +
+								"\tUptime: %v, Downtime: %v", host.Ip,
+								host.Name, host.isUp,
+								host.GetUptime(), host.GetDowntime())
+
 						} else {
 							// Debug print the service update
-							output <- fmt.Sprintf("Received a ping update for %v on %v. Status: %v. "+
-								"Not Updating Scoreboard", update.Ip,
-								sbd.Hosts[indexOfHosts].Name, update.IsUp)
+							output <- fmt.Sprintf("Received a ping update for %v on %v.\n" +
+								"\tStatus: %v -> Didn't need to update scoreboard.\n" +
+								"\tUptime: %v, Downtime: %v", host.Ip,
+								host.Name, host.isUp,
+								host.GetUptime(), host.GetDowntime())
 						}
 					}
+
+					break // We found the correct host, so stop searching
 				}
 			}
 		default: // There is not another update on the line, so we'll wait for one
@@ -209,5 +393,4 @@ func (sbd *State) StateUpdater(updateChannel chan ServiceUpdate, output chan str
 			time.Sleep(1 * time.Second)
 		}
 	}
-
 }

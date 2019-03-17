@@ -127,6 +127,9 @@ func main() {
 	// Test privileges for ICMP and opening port 80. Exit uncleanly if incorrect privileges are used.
 	testPrivileges()
 
+	// Start scoring services
+	sbd.StartScoring()
+
 	if sbd.Config.PingHosts { // The ping option was set
 
 		// Thread for pinging hosts. Results are shipped to the

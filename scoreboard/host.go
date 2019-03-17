@@ -31,7 +31,51 @@ type Host struct {
 	Ip string `yaml:"ip"`
 
 	// A flag used to represent whether a Host is responding to ICMP
-	PingUp bool
+	isUp bool
+
+	// Times to detail how long the service has been up or down
+	uptime time.Duration
+
+	downtime time.Duration
+
+	previousUpdateTime time.Time
+
+}
+
+func (host *Host) IsUp() bool {
+	return host.isUp
+}
+
+func (host *Host) SetUp(state bool) {
+	if host.isUp != state {
+		now := time.Now()
+		host.isUp = state
+
+		if host.isUp { // Service is up so calculate how long it was down
+			host.downtime = host.downtime + now.Sub(host.previousUpdateTime)
+		} else { // Service is down, so calculate how long it was up
+			host.uptime = host.uptime + now.Sub(host.previousUpdateTime)
+		}
+
+		host.previousUpdateTime = now
+	}
+
+}
+
+func (host *Host) GetUptime() time.Duration {
+	if host.isUp {
+		return host.uptime + time.Now().Sub(host.previousUpdateTime)
+	}
+
+	return host.uptime
+}
+
+func (host *Host) GetDowntime() time.Duration {
+	if ! host.isUp {
+		return host.downtime + time.Now().Sub(host.previousUpdateTime)
+	}
+
+	return host.downtime
 }
 
 // Function to ping a host at an IP. Results are shipped as ServiceUpdates through

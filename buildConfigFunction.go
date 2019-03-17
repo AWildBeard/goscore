@@ -171,7 +171,7 @@ hosts:
         command: "dig www.google.com @172.20.242.10"
         # Match the response from the command
         # in either stderr or stdout
-        response: "ANSWER: 1"     # Required in this mode
+        response: "ANSWER: [^0]"     # Required in this mode
 
   ## HTTP example using a command  ##
   ## that outputs info over STDERR ##
@@ -180,39 +180,60 @@ hosts:
     services:                         # Required
       - service: "http"               # Required
         protocol: "host-command"      # Required
-        command: "wget 172.20.241.20" # Required in this mode
+        command: "wget 172.20.241.20 -O /dev/null" # Required in this mode
         response: "200 OK"            # Required in this mode
 
 #################################
 ### Required fields for 'config:'
 # pingHosts:
-#       - Either 'yes' or 'no'. If set to 'yes', every service defined in the 'service:' section
-#       - will have it's host pinged for better metric gathering.
+#       - Either 'yes' or 'no'. If set to 'yes', every service
+#         defined in the 'service:' section will have it's
+#         host pinged for better metric gathering.
 #
 # pingInterval:
-#       - The interval between pinging hosts. The argument for this option can be in the form of 
-#       - any numerical value that has a suffix such as 's', 'm', 'h', and more. 's' stands for seconds
-#       - 'm' stands for minutes, and 'h' stands four hours. If the argument was '60s', every host would be
-#       - pinged every 60 seconds to determine if it is still online. '3m' would mean that every host will
-#       - be pinged every 3 minutes.
+#       - The interval between pinging hosts. The argument for
+#         this option can be in the form of any numerical value
+#         that has a suffix such as 's', 'm', 'h', and more.
+#         's' stands for seconds 'm' stands for minutes, and
+#         'h' stands four hours. If the argument was '60s',
+#         every host would be pinged every 60 seconds to
+#         determine if it is still online. '3m' would mean
+#         that every host will be pinged every 3 minutes.
 #
 # pingTimeout:
-#       - The duration to wait for the remote host to respond to one of our pings
+#       - The duration to wait for the remote host to
+#         respond to one of our pings
 #
 # serviceInterval:
 #       - The same as pingInterval above but for services.
 #
 # serviceTimeout:
 #       - The same as pingTimeout above but for services.
+#         This also designates the time to wait on a
+#         'host-command' to run before killing it with
+#         SIGKILL
+#
+# defaultState:
+#		- The default state for the scored services and hosts.
+#         If you are hosting a CTF where the services start "up";
+#         then this setting should be "up". Otherwise, the services
+#         are starting down and should be set to "down"
+#
+# competitionName:
+#		- The name for the competition. This is used in the web
+#		  interface to identify the interface.
+#
 ###
 #################################
 
 config:
-  pingHosts: "yes" # whether to ping hosts or not
-  pingInterval: "60s" # time between pings
-  pingTimeout: "5s" # time to wait for a response ping from host
-  serviceInterval: "120s" # time between checking services
-  serviceTimeout: "10s" # time to wait for a service to respond and finish its connection
+  pingHosts: "yes"
+  pingInterval: "60s"
+  pingTimeout: "5s"
+  serviceInterval: "120s"
+  serviceTimeout: "10s"
+  defaultState: "up"
+  competitionName: "Blue team comp"
 
 `
 	if wd, err := os.Getwd(); err == nil {

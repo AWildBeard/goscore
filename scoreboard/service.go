@@ -26,7 +26,8 @@ import (
 	"time"
 )
 
-// An individual Service that is contained by a Host
+// An individual Service that is contained by a Host.
+// Service implements UptimeTracking
 type Service struct {
 	// The name of the Service this struct represents
 	Name string `yaml:"service"`
@@ -49,7 +50,15 @@ type Service struct {
 	Protocol string `yaml:"protocol"`
 
 	// Boolean flag to represent whether the service is currently up
-	IsUp bool
+	isUp bool
+
+	// Times to detail how long the service has been up or down
+	uptime time.Duration
+
+	downtime time.Duration
+
+	previousUpdateTime time.Time
+
 }
 
 // Struct to hold an update to a service held by ScoreboardState
@@ -70,6 +79,42 @@ type ServiceUpdate struct {
 	// This is used to uniquely identify services contained
 	// within hosts for the Scoreboard State Updater
 	ServiceName string
+}
+
+func (service *Service) IsUp() bool {
+	return service.isUp
+}
+
+func (service *Service) SetUp(state bool) {
+	if service.isUp	!= state {
+		now := time.Now()
+		service.isUp = state
+
+		if service.isUp { // Service is up so calculate how long it was down
+			service.downtime = service.downtime + now.Sub(service.previousUpdateTime)
+		} else { // Service is down, so calculate how long it was up
+			service.uptime = service.uptime + now.Sub(service.previousUpdateTime)
+		}
+
+		service.previousUpdateTime = now
+	}
+
+}
+
+func (service *Service) GetUptime() time.Duration {
+	if service.isUp {
+		return service.uptime + time.Now().Sub(service.previousUpdateTime)
+	}
+
+	return service.uptime
+}
+
+func (service *Service) GetDowntime() time.Duration {
+	if ! service.isUp {
+		return service.downtime + time.Now().Sub(service.previousUpdateTime)
+	}
+
+	return service.downtime
 }
 
 // This function checks a single service in the predefined
