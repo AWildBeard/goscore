@@ -16,36 +16,36 @@ package main
 
 import (
 	"fmt"
-	"github.com/AWildBeard/goscore/scoreboard"
 	"gopkg.in/yaml.v2"
+	"io/ioutil"
 	"os"
 	"time"
 )
 
-// A struct to represent the parsed yaml config. This type is
+// YamlConfig is a struct to represent the yaml config. This type is
 // passed directly to yaml.v2 for parsing the physical
-// config file into active memory used to create ServiceState.Config
-type Config struct {
-	Hosts  []scoreboard.Host `yaml:"hosts"`
+// config file into active memory which is used to create State
+type YamlConfig struct {
+	Hosts  []Host `yaml:"hosts"`
 	Config map[string]string
 }
 
 // An error that can arrise from parsing the config file and checking for
 // specific required configuration fields.
-type ConfigError string
+type configError string
 
-// Converts ConfigError to a String.
-// Implements Error for ConfigError
-func (err ConfigError) Error() string {
+// Converts configError to a String.
+// Implements Error for configError
+func (err configError) Error() string {
 	return string(err)
 }
 
 // This function simple Opens the config.yaml file and parses it
-// into the Config type, then returns that type.
-func initConfig() (Config, error) {
+// into the YamlConfig type, then returns that type.
+func initConfig() (YamlConfig, error) {
 	var (
 		configFile *os.File
-		config     Config
+		config     YamlConfig
 	)
 
 	// Test each config file option.
@@ -63,75 +63,71 @@ func initConfig() (Config, error) {
 
 	// Attempt to decode the config into a go type
 	yamlDecoder := yaml.NewDecoder(configFile)
-	if err := yamlDecoder.Decode(&config); err == nil {
-		return config, nil
-	} else {
-		return config, err
-	}
+	return config, yamlDecoder.Decode(&config)
 }
 
-func (config *Config) ValidateConfig() error {
+func (config *YamlConfig) validateConfig() error {
 	// Test for pingHosts
 	if len(config.Config["pingHosts"]) == 0 {
-		return ConfigError("You must include the 'pingHosts:' field under 'config:'")
+		return configError("You must include the 'pingHosts:' field under 'config:'")
 	} else if config.Config["pingHosts"] == "yes" { // It's there so test pingHost related fields
 		if len(config.Config["pingInterval"]) == 0 {
-			return ConfigError("You must define the 'pingInterval:' field under 'config:'")
+			return configError("You must define the 'pingInterval:' field under 'config:'")
 		}
 
 		if len(config.Config["pingTimeout"]) == 0 {
-			return ConfigError("You must define the 'pingTimeout:' field under 'config:'")
+			return configError("You must define the 'pingTimeout:' field under 'config:'")
 		}
 	}
 
 	// Test Service fields
 	if len(config.Config["serviceInterval"]) == 0 {
-		return ConfigError("You must define the 'serviceInterval:' field under 'config:'")
+		return configError("You must define the 'serviceInterval:' field under 'config:'")
 	}
 
 	if len(config.Config["serviceTimeout"]) == 0 {
-		return ConfigError("You must define the 'serviceTimeout:' field under 'config:'")
+		return configError("You must define the 'serviceTimeout:' field under 'config:'")
 	}
 
 	// Check that at least one service is defined in the config file
 	if len(config.Hosts) < 1 {
-		return ConfigError("There must be at least one service defined in the config file!")
+		return configError("There must be at least one service defined in the config file!")
 	}
 
 	// Test for the required fields for Hosts and Services
 	for _, host := range config.Hosts {
 		if len(host.Name) == 0 {
-			return ConfigError("You must define the name of the host in the host: field under hosts:")
+			return configError("You must define the name of the host in the host: field under hosts:")
 		}
 
-		if len(host.Ip) == 0 {
-			return ConfigError(fmt.Sprintf("You must define the IP field for %v "+
+		if len(host.IP) == 0 {
+			return configError(fmt.Sprintf("You must define the IP field for %v "+
 				"in the ip: field.", host.Name))
 		}
 
 		if len(host.Services) == 0 {
-			return ConfigError(fmt.Sprintf("You must define at least one "+
+			return configError(fmt.Sprintf("You must define at least one "+
 				"Service for %v under the services: field", host.Name))
 		}
 
 		for _, service := range host.Services {
 			if len(service.Name) == 0 {
-				return ConfigError(fmt.Sprintf("You must define the name of the "+
+				return configError(fmt.Sprintf("You must define the name of the "+
 					"service for %v under the service: field", host.Name))
 			}
 
 			if len(service.Protocol) == 0 {
-				return ConfigError(fmt.Sprintf("You must define the protocol "+
+				return configError(fmt.Sprintf("You must define the protocol "+
 					"to use to test %v on %v", service.Name, host.Name))
 			}
 
 			if service.Protocol != "host-command" && len(service.Port) == 0 {
-				return ConfigError(fmt.Sprintf("You must define the port to "+
+				return configError(fmt.Sprintf("You must define the port to "+
 					"connet to to test %v on %v", service.Name, host.Name))
 			}
 
 			if service.Protocol == "host-command" && (len(service.Command) == 0 || len(service.Response) == 0) {
-				return ConfigError(fmt.Sprintf("You must speicify a command and a response to "+
+				return configError(fmt.Sprintf("You must speicify a command and a response to "+
 					"run to test %v on %v in host-command mode", service.Name, host.Name))
 			}
 		}
@@ -141,7 +137,7 @@ func (config *Config) ValidateConfig() error {
 }
 
 // This function converts the raw Config type to ScoreboardState.Config
-func ParseConfigToScoreboard(config *Config, scoreboard *scoreboard.State) error {
+func parseConfigToScoreboard(config *YamlConfig, scoreboard *State) error {
 	// Determine if the user has set the ping option in the config file.
 	if config.Config["pingHosts"] != "yes" {
 		scoreboard.Config.PingHosts = false // Deactivates all the ping functionality of the program
@@ -154,7 +150,7 @@ func ParseConfigToScoreboard(config *Config, scoreboard *scoreboard.State) error
 			scoreboard.Config.TimeBetweenPingChecks = pingDuration
 
 		} else { // The option was not found
-			return ConfigError(fmt.Sprint("Failed to parse pingInterval from config file:", err))
+			return configError(fmt.Sprint("Failed to parse pingInterval from config file:", err))
 		}
 
 		// Determine the required pingTimeout option from the config file
@@ -162,7 +158,7 @@ func ParseConfigToScoreboard(config *Config, scoreboard *scoreboard.State) error
 			scoreboard.Config.PingTimeout = ptimeout
 
 		} else { // The option was not found
-			return ConfigError(fmt.Sprint("Failed to parse pingTimeout in config file:", err))
+			return configError(fmt.Sprint("Failed to parse pingTimeout in config file:", err))
 		}
 	}
 
@@ -171,7 +167,7 @@ func ParseConfigToScoreboard(config *Config, scoreboard *scoreboard.State) error
 		scoreboard.Config.TimeBetweenServiceChecks = serviceDuration
 
 	} else { // The option was not found
-		return ConfigError(fmt.Sprint("Failed to parse serviceInterval from config file:", err))
+		return configError(fmt.Sprint("Failed to parse serviceInterval from config file:", err))
 	}
 
 	// Check for ServiceTimeout
@@ -179,7 +175,7 @@ func ParseConfigToScoreboard(config *Config, scoreboard *scoreboard.State) error
 		scoreboard.Config.ServiceTimeout = stimeout
 
 	} else {
-		return ConfigError(fmt.Sprint("Failed to parse serviceTimeout from config file:", err))
+		return configError(fmt.Sprint("Failed to parse serviceTimeout from config file:", err))
 	}
 
 	if configDefaultServiceState := config.Config["defaultState"]; configDefaultServiceState != "" {
@@ -189,13 +185,38 @@ func ParseConfigToScoreboard(config *Config, scoreboard *scoreboard.State) error
 			scoreboard.Config.DefaultServiceState = false
 		}
 	} else {
-		return ConfigError(fmt.Sprint("Failed to parse defaultState from 'config:' section!"))
+		return configError(fmt.Sprint("Failed to parse defaultState from 'config:' section!"))
 	}
 
 	if configCompetitionName := config.Config["competitionName"]; configCompetitionName != "" {
 		scoreboard.Name = configCompetitionName
 	} else {
-		return ConfigError(fmt.Sprint("Failed to parse competitionName from 'config:' section!"))
+		return configError(fmt.Sprint("Failed to parse competitionName from 'config:' section!"))
+	}
+
+	scoreboard.Config.ScoreboardDoc = standardScoreboardDoc
+	if configScoreboard := config.Config["customScoreboard"]; configScoreboard != "" && configScoreboard != "default" {
+		if fileBytes, err := ioutil.ReadFile(configScoreboard); err == nil {
+			scoreboard.Config.ScoreboardDoc = string(fileBytes)
+		} else {
+			return configError(fmt.Sprint("Failed to read custom scoreboard file:", err))
+		}
+	}
+
+	if duration := config.Config["competitionDuration"]; duration != "" {
+		if gameDuration, err := time.ParseDuration(duration); err == nil {
+			scoreboard.Config.CompetitionDuration = gameDuration
+		} else {
+			return configError(fmt.Sprint("Failed to parse duration:", err))
+		}
+	} else {
+		return configError(fmt.Sprint("Failed to parse duration from 'config:'"))
+	}
+
+	if listenAddr := config.Config["listenAddress"]; listenAddr != "" {
+		scoreboard.Config.ListenAddress = listenAddr
+	} else {
+		return configError(fmt.Sprint("Failed to parse listenAddress from 'config:'"))
 	}
 
 	scoreboard.Hosts = config.Hosts

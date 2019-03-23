@@ -12,39 +12,48 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package scoreboard
+package main
 
 import (
 	"github.com/sparrc/go-ping"
 	"time"
 )
 
-// Struct to represent a Host that contains Services
+// Host represents a Host that contains Services
 type Host struct {
-	// The name of the host give in the config file
+	// Name is the name of the host give in the config file
 	Name string `yaml:"host"`
 
-	// The service(s) provided on the host
+	// Services are the service(s) provided on the host
 	Services []Service `yaml:"services"`
 
-	// The IP Address of a Host
-	Ip string `yaml:"ip"`
+	// IP is the IP address of a Host
+	IP string `yaml:"ip"`
 
 	// A flag used to represent whether a Host is responding to ICMP
 	isUp bool
 
-	// Times to detail how long the service has been up or down
+	// Time to represent how long the host has been responding to ICMP
 	uptime time.Duration
 
+	// Time to represent how long the host has not been responding to ICMP
 	downtime time.Duration
 
+	// Variable to represent the last time the Host's service state
+	// (isUp) was updated.
 	previousUpdateTime time.Time
 }
 
+// IsUp implements UptimeTracking for Host. This method provides
+// a public way to access the Host's up state
 func (host *Host) IsUp() bool {
 	return host.isUp
 }
 
+// SetUp implements UptimeTracking for Host. This method provides
+// a way to change the state of the Host's up state. At the same
+// time this method also deals with changes to the uptime and
+// downtime tracking functionality.
 func (host *Host) SetUp(state bool) {
 	if host.isUp != state {
 		now := time.Now()
@@ -61,28 +70,36 @@ func (host *Host) SetUp(state bool) {
 
 }
 
-func (host *Host) GetUptime() time.Duration {
+// GetUptime implements UptimeTracking for Host. GetUptime allows for
+// querying and returning accurate durations of uptime with respect
+// to the referenceTime provided to the function for the Host.
+func (host Host) GetUptime(referenceTime time.Time) time.Duration {
 	if host.isUp {
-		return host.uptime + time.Now().Sub(host.previousUpdateTime)
+		return host.uptime + referenceTime.Sub(host.previousUpdateTime)
 	}
 
 	return host.uptime
 }
 
-func (host *Host) GetDowntime() time.Duration {
+// GetDowntime implements UptimeTracking for Host. GetDowntime
+// allows for querying accurate durations of downtime with respect
+// to the referenceTime provided to the function for the Host.
+func (host Host) GetDowntime(referenceTime time.Time) time.Duration {
 	if !host.isUp {
-		return host.downtime + time.Now().Sub(host.previousUpdateTime)
+		return host.downtime + referenceTime.Sub(host.previousUpdateTime)
 	}
 
 	return host.downtime
 }
 
-// Function to ping a host at an IP. Results are shipped as ServiceUpdates through
-// updateChannel. This function gives the remote host three chances to respond.
-// As long as one response is received, the host is marked as up.
+// PingHost allows for checking if a host is online by using ICMP.
+// Results are shipped as ServiceUpdates through updateChannel.
+// This function gives the remote host three chances to respond
+// before the timeout specified is reached. As long as one response
+// is received in this time period, the host is marked as up.
 func (host *Host) PingHost(updateChannel chan ServiceUpdate, timeout time.Duration) {
 	pingSuccess := false
-	hostToPing := host.Ip
+	hostToPing := host.IP
 
 	if pinger, err := ping.NewPinger(hostToPing); err == nil {
 		pinger.Timeout = timeout

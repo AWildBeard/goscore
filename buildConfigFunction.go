@@ -223,6 +223,23 @@ hosts:
 #		- The name for the competition. This is used in the web
 #		  interface to identify the interface.
 #
+# listenAddress:
+#       - The address to bind the scoreboard web interface
+#         to. Setting this to 127.0.0.1:80 will make it
+#         unreachable.
+#
+# customScoreboard:
+#       - A path to a custom scoreboard html page. See
+#         https://github.com/AWildBeard/goscore/wiki for
+#         help on designing a custom scoreboard. Setting
+#         this to "default" will use the built in scoreboard
+#
+# competitionDuration:
+#       - The duration for the competition. After this
+#         duration has been met, Checking services and
+#         pinging hosts (if configured) will stop, as will
+#         all updates to the scoreboard.
+#
 ###
 #################################
 
@@ -232,6 +249,9 @@ config:
   pingTimeout: "5s"
   serviceInterval: "120s"
   serviceTimeout: "10s"
+  listenAddress: ":80"
+  customScoreboard: "default"
+  competitionDuration: "15m"
   defaultState: "up"
   competitionName: "Blue team comp"
 

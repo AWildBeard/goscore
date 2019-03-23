@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package scoreboard
+package main
 
 import (
 	"bytes"
@@ -26,64 +26,80 @@ import (
 	"time"
 )
 
-// An individual Service that is contained by a Host.
-// Service implements UptimeTracking
+// Service represents an individual Service that is contained
+// by a particular Host. Service implements UptimeTracking
 type Service struct {
-	// The name of the Service this struct represents
+	// Name is the name of the Service this struct represents
 	Name string `yaml:"service"`
 
-	// The Port that the Service is hosted on
+	// Port is the Port that the Service is hosted on
 	Port string `yaml:"port"`
 
-	// The String to write to the remote Service.
+	// Command is the string to write to the remote Service.
 	// This is optional and can be an empty string
-	// if Protocol is not host-command
+	// if Protocol is not host-command. It can also represent
+	// a host-level command to be used instead of manually opening
+	// a socket and manually writing a connection string.
 	Command string `yaml:"command"`
 
-	// A Regular Expression that can match the expected
-	// response from the remote Service. This is optional
-	// and can be and empty string.
+	// Response is a regular expression that can match the expected
+	// response from the remote Service or command. This is optional
+	// if protocol is not 'host-command'.
 	Response string `yaml:"response"`
 
-	// The Layer 4 Protocol used to connect to the Service.
+	// Protocol is the layer 4 protocol used to connect to the Service
+	// or it can be 'host-command' to signify that running a system
+	// level command should occur in the place of this program opening
+	// a socket and manually testing the service.
 	// I.E. 'tcp', 'udp', or 'host-command' to run a system command
 	Protocol string `yaml:"protocol"`
 
 	// Boolean flag to represent whether the service is currently up
 	isUp bool
 
-	// Times to detail how long the service has been up or down
+	// Time to represent how long the Service has been responding to Command
 	uptime time.Duration
 
+	// Time to represent how long the Service has not been responding to Command
 	downtime time.Duration
 
+	// Variable to represent the last time the Service's service state
+	// (isUp) was updated.
 	previousUpdateTime time.Time
 }
 
-// Struct to hold an update to a service held by ScoreboardState
+// ServiceUpdate is the type used to ship updates from update functions
+// to the StateUpdater thread.
 type ServiceUpdate struct {
-	// The IP of the host who's service update this is for.
+	// IP is the IP of the host who's service update this is for.
 	// This is used as a unique identifier to identify hosts.
-	Ip string
+	IP string
 
-	// If true, this ServiceUpdate contains data on an update to a service,
-	// otherwise, this is a ICMP update report.
+	// ServiceUpdate is a flag that if true, represents data
+	// on an update to a service, otherwise, this is a ICMP update.
 	ServiceUpdate bool
 
-	// Flag to represent whether the Service is up, or if ServiceUpdate is
-	// false, this flag represents if ICMP is up for the remote host
+	// IsUp is a flag to represent whether the Service is up,
+	// or if ServiceUpdate is false, this flag represents if
+	// ICMP is up for the remote host
 	IsUp bool
 
-	// This variable contains the name of the service to update.
+	// ServiceName is the name of the service to update.
 	// This is used to uniquely identify services contained
-	// within hosts for the Scoreboard State Updater
+	// within hosts for the StateUpdater
 	ServiceName string
 }
 
+// IsUp implements UptimeTracking for Service. This method provides
+// a public way to access the Services's up state
 func (service *Service) IsUp() bool {
 	return service.isUp
 }
 
+// SetUp implements UptimeTracking for Service. This method provides
+// a way to change the state of the Service's up state. At the same
+// time this method also deals with changes to the uptime and
+// downtime tracking functionality.
 func (service *Service) SetUp(state bool) {
 	if service.isUp != state {
 		now := time.Now()
@@ -100,24 +116,31 @@ func (service *Service) SetUp(state bool) {
 
 }
 
-func (service *Service) GetUptime() time.Duration {
+// GetUptime implements UptimeTracking for Service. GetUptime allows for
+// querying and returning accurate durations of uptime with respect
+// to the referenceTime provided to the function for the Service.
+func (service *Service) GetUptime(referenceTime time.Time) time.Duration {
 	if service.isUp {
-		return service.uptime + time.Now().Sub(service.previousUpdateTime)
+		return service.uptime + referenceTime.Sub(service.previousUpdateTime)
 	}
 
 	return service.uptime
 }
 
-func (service *Service) GetDowntime() time.Duration {
+// GetDowntime implements UptimeTracking for Service. GetDowntime
+// allows for querying accurate durations of downtime with respect
+// to the referenceTime provided to the function for the Service.
+func (service *Service) GetDowntime(referenceTime time.Time) time.Duration {
 	if !service.isUp {
-		return service.downtime + time.Now().Sub(service.previousUpdateTime)
+		return service.downtime + referenceTime.Sub(service.previousUpdateTime)
 	}
 
 	return service.downtime
 }
 
-// This function checks a single service in the predefined
-// manner contained in the Service type.
+// CheckService is a method called as a thread to check a specific service on a specific host.
+// This function checks a single service in the predefined manner contained within the
+// Service type. Results are shipped as the ServiceUpdate type via the updateChannel.
 func (service *Service) CheckService(updateChannel chan ServiceUpdate, ip string, timeout time.Duration) {
 	serviceUp := false
 

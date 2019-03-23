@@ -17,16 +17,10 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/AWildBeard/goscore/scoreboard"
 	"io/ioutil"
 	"log"
-	"net/http"
 	"os"
-	"os/user"
 	"path"
-	"runtime"
-	"strings"
-	"time"
 )
 
 const defaultConfigFileName string = "config.yaml"
@@ -51,12 +45,14 @@ func init() {
 
 	cwd, _ := os.Getwd()
 
+	// Flags
 	flag.StringVar(&defaultConfigFileLocation, "c", defaultConfigFileLocation,
 		"Specify a custom config file location")
 	flag.BoolVar(&debug, "d", false, "Print debug messages")
 	flag.BoolVar(&buildCfg, "buildcfg", false, "Output an example configuration file "+
 		"to "+cwd+"/config.yaml")
 
+	// Set a custom command line usage
 	flag.Usage = usage
 }
 
@@ -83,23 +79,19 @@ func main() {
 
 	var (
 		// Create a new scoreboard
-		sbd = scoreboard.NewScoreboard()
-
-		// Make a buffered channel to write service updates over. These updates will get read by a thread
-		// that will write lock ScoreboardState
-		updateChannel = make(chan scoreboard.ServiceUpdate, 10)
+		sbd = NewScoreboard()
 	)
 
 	// Read and parse the config file
 	if config, err := initConfig(); err == nil { // Initialize the config
 
-		if err := config.ValidateConfig(); err != nil {
+		if err := config.validateConfig(); err != nil {
 			ilog.Println(err)
 			os.Exit(1)
 		}
 
 		// Parse the config to the scoreboard
-		if err := ParseConfigToScoreboard(&config, &sbd); err != nil { // Failed to parse config
+		if err := parseConfigToScoreboard(&config, &sbd); err != nil { // Failed to parse config
 			ilog.Println("Failed to parse config:", err)
 			os.Exit(1)
 
@@ -127,117 +119,50 @@ func main() {
 	// Test privileges for ICMP and opening port 80. Exit uncleanly if incorrect privileges are used.
 	testPrivileges()
 
-	// Start scoring services
-	sbd.StartScoring()
-
-	if sbd.Config.PingHosts { // The ping option was set
-
-		// Thread for pinging hosts. Results are shipped to the
-		// ScoreboardStateUpdater (defined below) as ServiceUpdates.
-		// We don't read-lock these threads with the Scoreboard State
-		// Because they should only be reading copies of the data that
-		// is stored in Scoreboard State.
-		go func(channel chan scoreboard.ServiceUpdate, hosts []scoreboard.Host, scoreboardConfig scoreboard.Config) {
-
-			ilog.Println("Started the Ping Check Provider")
-
-			for {
-				for i := range hosts {
-					// Asyncronously ping hosts so we don't wait full timeouts and can ping faster.
-					go hosts[i].PingHost(channel, scoreboardConfig.PingTimeout)
-				}
-
-				// Sleep before testing these hosts again
-				time.Sleep(scoreboardConfig.TimeBetweenPingChecks)
-			}
-		}(updateChannel, sbd.Hosts, sbd.Config)
-	}
-
-	// Thread for querying services. Results are shipped to the
-	// ScoreboardStateUpdater as ServiceUpdates
-	// We don't read-lock these threads because they should only be handling
-	// copies of the data that is in the Scoreboard State, not the actual data.
-	go func(channel chan scoreboard.ServiceUpdate, hosts []scoreboard.Host, config scoreboard.Config) {
-
-		ilog.Println("Started the Host Check Provider")
-
-		for {
-			// Go ahead and test these bad guys before going to sleep.
-			for hostIndex := range hosts { // Check each host
-				for serviceIndex := range hosts[hostIndex].Services { // Check each service
-					// Asyncronously check services so we can check a lot of them
-					// and don't have to wait on service timeout durations
-					// which might be lengthy.
-					go hosts[hostIndex].Services[serviceIndex].CheckService(channel,
-						hosts[hostIndex].Ip, config.ServiceTimeout)
-				}
-			}
-
-			// Sleep before testing these services again.
-			time.Sleep(config.TimeBetweenServiceChecks)
-		}
-	}(updateChannel, sbd.Hosts, sbd.Config)
-
-	// Start the scoreboardStateUpdater to update the scoreboard with
-	// ServiceUpdates
-	go func(updates chan scoreboard.ServiceUpdate) {
-
-		ilog.Println("Started the Service State Updater")
-		output := make(chan string)
-		go sbd.StateUpdater(updateChannel, output)
-
-		for {
-			dlog.Println(<-output) // Print as fast as you can, and wait for data when you can't
-		}
-	}(updateChannel)
-
-	// Register '/' with ScoreboardState
-	http.Handle("/", &sbd)
-
-	ilog.Println("Started Webserver")
-
-	// Start the webserver and serve content
-	http.ListenAndServe(":80", nil)
-}
-
-// This function tests privileges and initiates an unclean exit if the
-// incorrect privileges are used to run the program.
-func testPrivileges() {
-	if usr, err := user.Current(); err == nil {
-
-		// Attempt to identify the Administrator group
-		if runtime.GOOS == "windows" && !strings.HasSuffix(usr.Gid, "-544") {
-			fmt.Println("Please run as Administrator. " +
-				"This program needs Administrator to open port 80 and do ICMP.")
-
-			os.Exit(1)
-		} else if usr.Gid != "0" && usr.Uid != "0" { // ID root
-			if runtime.GOOS == "linux" {
-				fmt.Println("Please run as root. " +
-					"This program needs root to open port 80 and do ICMP.")
-			} else { // Dunno bud
-				fmt.Println("Please run with elevated privileges. " +
-					"This program needs elevated privileges to open port 80 and do ICMP")
-			}
-
-			os.Exit(1)
-		}
-	}
+	// Start the competition!
+	sbd.Start()
 }
 
 // Usage function to show program usage when the -h flag is given.
 func usage() {
-	fmt.Println(`USAGE:
-	Starting goscore can be as simple as running it without any arguments.
-	You can enable debug mode by passing the -d flag and can speicify your
-	own config file by using the -c flag. You can build a simple config
-	example by passing the -buildcfg flag. Use the -h flag to print this 
-	message
+	fmt.Println(`SYNOPSIS:
+	This program is designed to offer a simple scoreboard solution for
+	cyber security capture the flag competitions and comes ready to be
+	deployed for a competition. It allows specifying services to test
+	in a config file, the interval by which to test them on, and the
+	method by which to test them, including host level commands that
+	can be run and evaluated to determine the services state, or by
+	manually typing a connection string in the config file that will
+	be passed to the remote services port. This program also offers
+	a built in HTML scoreboard.
+
+	If you are looking for config file help, or additional info about
+	this program, please see; https://github.com/AWildBeard/goscore/wiki
+
+OPTIONS:
+	-buildcfg
+		This flag will cause the program to write an example config file
+		to your current working directory an exit. Use this to generate
+		a config template that you can modify to suite your own needs.
+
+	-c [config file]
+		This flag allows a user to specify a directory that contains the
+		config file needed to run this program. By default, this program
+		checks for the config file in the directory where this program
+		is run, or the directory where this program is stored.
+
+	-d 
+		This flag enables debug output to STDERR of the console 
+		where this program was started.
+
+	-h
+		This flag will display this message and exit.
 
 LICENSE:
 	You can view your rights with this software in the LICENSE here: 
 	https://github.com/AWildBeard/goscore/blob/master/LICENSE and
-	can download the source here: https://github.com/AWildBeard/goscore
+	can download the source code for this program here: 
+	https://github.com/AWildBeard/goscore
 
 	By using this piece of software you agree to the terms as they are
 	detailed in the LICENSE
@@ -246,16 +171,6 @@ LICENSE:
 
 AUTHOR:
 	This program was created by Michael Mitchell for the
-	University of West Florida Cyber Security Club`)
-}
-
-// Utility function to translate a boolean flag to
-// the string representation of yes for true and
-// no for false
-func boolToWord(flag bool) string {
-	if flag {
-		return "yes"
-	} else {
-		return "no"
-	}
+	University of West Florida Cyber Security Club and includes
+	libraries and software written by Canonical, and Cameron Sparr`)
 }
