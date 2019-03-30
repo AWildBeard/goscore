@@ -45,7 +45,7 @@ type State struct {
 	lock sync.RWMutex
 
 	// Template lock is the lock associated with the webTemplate.
-	templateLock sync.RWMutex
+	webContentLock sync.RWMutex
 }
 
 // Config represents the configuration for the scoreboard.
@@ -179,6 +179,7 @@ func (sbd *State) Start() {
 	// Make a buffered channel to write service updates over. These updates will get read by a thread
 	// that will write lock ScoreboardState
 	updateChannel := make(chan ServiceUpdate, 10)
+	newUpdateSignal := make(chan bool, 1)
 
 	// Make channels to write shutdown signals over
 	shutdownPingSignal := make(chan bool, 1)
@@ -206,9 +207,9 @@ func (sbd *State) Start() {
 
 	go sbd.ServiceChecker(updateChannel, shutdownServiceSignal)
 
-	go sbd.StateUpdater(updateChannel, shutdownStateUpdaterSignal)
+	go sbd.StateUpdater(updateChannel, newUpdateSignal, shutdownStateUpdaterSignal)
 
-	go sbd.WebContentUpdater(shutdownTemplateUpdaterSignal)
+	go sbd.WebContentUpdater(newUpdateSignal, shutdownTemplateUpdaterSignal)
 
 	ilog.Println("Started Scoreboard")
 	// Start the webserver and serve content
@@ -254,7 +255,7 @@ func (sbd *State) startScoring() {
 // write lock. however, once this function has establish a write lock,
 // don't drop it because it might need to be re-established nano-seconds later.
 // This function read locks for safety reasons.
-func (sbd *State) StateUpdater(updateChannel chan ServiceUpdate, shutdownUpdaterSignal chan bool) {
+func (sbd *State) StateUpdater(updateChannel chan ServiceUpdate, updateSignal, shutdownUpdaterSignal chan bool) {
 
 	// These two flags are mutually exclusive. One being set does not rely on the other
 	// which is why we have two of them, instead of expressing their logic with a single flag.
@@ -380,6 +381,7 @@ func (sbd *State) StateUpdater(updateChannel chan ServiceUpdate, shutdownUpdater
 			// can view content. Otherwise, we had a read lock that needs to
 			// be released because we don't need it any longer.
 			if isWriteLocked {
+				updateSignal <- true // Signal the WebContentUpdater to re-evaluate the web content
 				sbd.lock.Unlock()
 				isWriteLocked = false
 			} else if isReadLocked { // This isn't a else case because this default case might be ran quickly in succession

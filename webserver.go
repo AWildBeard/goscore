@@ -12,8 +12,41 @@ import (
 
 // WebContentUpdater is a thread that is started be Start() to update the web interface.
 // It updates the template every 5 seconds by default right now.
-func (sbd *State) WebContentUpdater(shutdown chan bool) {
+func (sbd *State) WebContentUpdater(update, shutdown chan bool) {
+	// TODO: create sub templates for timers?
+	// By doing this we might save some compute power on regenerating
+	// the entire web content. We might not though, and this would just
+	// be a feel good change. If timers are segmented to a subtemplate,
+	// then the correct place to execute the subtemplate would be in ServeHTTP
+
 	ilog.Println("Started the Webpage Content Updater")
+
+	data := struct {
+		Title     string
+		Hosts     []Host
+		PingHosts bool
+		TimeLeft  time.Duration
+	}{}
+
+	sbd.lock.RLock()
+
+	data.Title = sbd.Name
+
+	data.Hosts = make([]Host, len(sbd.Hosts))
+	copy(data.Hosts, sbd.Hosts)
+
+	for i := range data.Hosts {
+		host := &(data.Hosts[i])
+		host.Services = make([]Service, len(sbd.Hosts[i].Services))
+		copy(host.Services, sbd.Hosts[i].Services)
+	}
+
+	data.PingHosts = sbd.Config.PingHosts
+	data.TimeLeft = sbd.TimeLeft()
+
+	sbd.lock.RUnlock()
+
+	byteBuf := bytes.Buffer{}
 
 	upFunc := func(tracker interface{}) time.Duration {
 		var duration time.Duration
@@ -49,102 +82,91 @@ func (sbd *State) WebContentUpdater(shutdown chan bool) {
 		return duration
 	}
 
+	tmplt := template.Template{}
+
+	// Put a few basic functions into the template to make using templates easier
+	if newTemplate, err := template.New("scoreboard").Funcs(template.FuncMap{
+		"Uptime":         upFunc,
+		"Downtime":       downFunc,
+		"FormatDuration": fmtDuration,
+	}).Parse(sbd.Config.ScoreboardDoc); err == nil {
+		tmplt = *newTemplate
+	} else {
+		fmt.Println("ERRORED ON HTML TEMPLATE CREATION:", err)
+		os.Exit(1)
+	}
+
+	if err := tmplt.Execute(&byteBuf, data); err != nil {
+		fmt.Println("ERRORED ON HTML TEMPLATE EXECUTE:", err)
+		os.Exit(1)
+	}
+
 	for {
+		// Update the web sheet with new data
+		sbd.webContentLock.Lock()
+		sbd.webSheet = byteBuf.Bytes()
+		sbd.webContentLock.Unlock()
+
+		time.Sleep(1 * time.Second)
+
+		// Clear the buffer for new data
+		byteBuf.Reset()
+
 		select {
 		case <-shutdown:
-			ilog.Println("Shutting down the Webpage Content Updater")
-			return
-		default:
-			/* TODO: re-implement a more complex way to determine if an update
-			 * to the webSheet needs to be performed. Currently an update is performed
-			 * every time because of changes to timers that are displayed in the web content
-			 */
-			byteBuf := bytes.Buffer{}
-
-			// Put a few basic functions into the template to make using templates easier
-			tmplt, err := template.New("scoreboard").Funcs(template.FuncMap{
-				"Uptime":         upFunc,
-				"Downtime":       downFunc,
-				"FormatDuration": fmtDuration,
-			}).Parse(sbd.Config.ScoreboardDoc)
-
-			if err != nil {
-				fmt.Println("ERRORED ON HTML TEMPLATE CREATION:", err)
-				os.Exit(1)
-			}
-
-			sbd.lock.RLock()
-
 			// Establish a read-only lock to the scoreboard to retrieve data,
 			// then drop the lock after we have retrieved that data we need.
-			data := struct {
-				Title     string
-				Hosts     []Host
-				PingHosts bool
-				TimeLeft  time.Duration
-			}{
-				sbd.Name,
-				sbd.Hosts,
-				sbd.Config.PingHosts,
-				sbd.TimeLeft(),
-			}
+			sbd.lock.RLock()
 
-			// Respond to the client
-			if err = tmplt.Execute(&byteBuf, data); err != nil {
-				fmt.Println("ERRORED ON HTML TEMPLATE EXECUTE:", err)
-				os.Exit(1)
+			copy(data.Hosts, sbd.Hosts)
+			for i := range data.Hosts {
+				host := &(data.Hosts[i])
+				copy(host.Services, sbd.Hosts[i].Services)
 			}
+			data.TimeLeft = sbd.TimeLeft()
 
 			sbd.lock.RUnlock()
 
-			newContent := byteBuf.Bytes()
-			updated := false
+			// Update the template with the new data
+			tmplt.Execute(&byteBuf, data)
 
-			sbd.templateLock.RLock()
-			if len(sbd.webSheet) != len(newContent) {
-				sbd.templateLock.RUnlock()
-				sbd.templateLock.Lock()
+			// Update the web sheet with that data
+			sbd.webContentLock.Lock()
+			sbd.webSheet = byteBuf.Bytes()
+			sbd.webContentLock.Unlock()
 
-				sbd.webSheet = newContent
+			// Exit
+			ilog.Println("Shutting down the Webpage Content Updater")
+			return
+		case <-update:
+			// Establish a read-only lock to the scoreboard to retrieve data,
+			// then drop the lock after we have retrieved that data we need.
+			sbd.lock.RLock()
 
-				sbd.templateLock.Unlock()
-
-				updated = true
-			} else {
-				for _, websheetByte := range sbd.webSheet {
-					for _, newContentByte := range newContent {
-						if websheetByte != newContentByte { // A change is needed
-							sbd.templateLock.RUnlock()
-							sbd.templateLock.Lock()
-
-							sbd.webSheet = newContent
-
-							sbd.templateLock.Unlock()
-
-							updated = true
-							break
-						}
-					}
-
-					if updated {
-						break
-					}
-				}
+			copy(data.Hosts, sbd.Hosts)
+			for i := range data.Hosts {
+				host := &(data.Hosts[i])
+				copy(host.Services, sbd.Hosts[i].Services)
 			}
 
-			if !updated {
-				sbd.templateLock.RUnlock()
-			}
-
-			time.Sleep(5 * time.Second)
+			sbd.lock.RUnlock()
+		default:
+			// Do nothing, just don't hang.
 		}
+
+		// Safe because TimeLeft() is a read only function on data that
+		// doesn't change for the life of program.
+		data.TimeLeft = sbd.TimeLeft()
+
+		// Update the template with the new data
+		tmplt.Execute(&byteBuf, data)
 	}
 }
 
 // ServeHTTP serves the `index.html` for the scoreboard.
 // Implements ServeHTTP for State
 func (sbd *State) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	sbd.templateLock.RLock()
+	sbd.webContentLock.RLock()
 	io.Copy(w, bytes.NewReader(sbd.webSheet))
-	sbd.templateLock.RUnlock()
+	sbd.webContentLock.RUnlock()
 }
