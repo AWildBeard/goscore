@@ -24,9 +24,11 @@ import (
 
 // State represents the scoreboard's state. This type holds
 // The hosts that are scored and the config by witch to score them.
-// There is also a RW lock to control reading and writing to this
-// type. This is implemented mainly because this type implements
-// scoreboardResponder so it can serve it's data over HTTP
+// There is also a RW serviceLock to control reading and writing to
+// the services contained within this type in addition to a
+// scoreboardPageLock and an adminPageLock. These locks serve to
+// control access to the individual resources. Updating between these
+// resources is done by dedicated timed threads.
 type State struct {
 	// Hosts is an array of Host that this scoreboard scores
 	Hosts []Host
@@ -40,14 +42,16 @@ type State struct {
 	Name string
 
 	// The webTemplate that get's updated periodically
-	webSheet []byte
+	scoreboardPage []byte
 
-	// lock is the RW lock that will allow updating the scoreboard
+	// serviceLock is the RW serviceLock that will allow updating the scoreboard
 	// quickly without locking out web clients
-	lock sync.RWMutex
+	serviceLock sync.RWMutex
 
-	// Template lock is the lock associated with the webTemplate.
-	webContentLock sync.RWMutex
+	// Template serviceLock is the serviceLock associated with the webTemplate.
+	scoreboardPageLock sync.RWMutex
+
+	adminPageLock sync.RWMutex
 }
 
 // Config represents the configuration for the scoreboard.
@@ -91,6 +95,12 @@ type Config struct {
 
 	// CompetitionDuration represents the duration to run the competition for.
 	CompetitionDuration time.Duration
+
+	// AdminName is the username for the management account
+	AdminName string
+
+	// AdminPassword is the password for the management account
+	AdminPassword string
 
 	// StartTime represents the time that the Start() function is called which as a result
 	// represents the time the competition started.
@@ -164,12 +174,7 @@ func (sbd *State) TimeLeft() time.Duration {
 // NewScoreboard is a helper function to return a new scoreboard
 func NewScoreboard() State {
 	return State{
-		make([]Host, 0),
-		Config{},
-		"",
-		[]byte{},
-		sync.RWMutex{},
-		sync.RWMutex{},
+		Hosts: make([]Host, 0),
 	}
 }
 
@@ -194,6 +199,7 @@ func (sbd *State) Start() {
 	// HTTP Server
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", sbd.scoreboardResponder)
+	mux.HandleFunc("/admin", sbd.adminPanel)
 
 	server := http.Server{
 		Addr:    sbd.Config.ListenAddress,
@@ -201,7 +207,7 @@ func (sbd *State) Start() {
 	}
 
 	// Make a buffered channel to write service updates over. These updates will get read by a thread
-	// that will write lock ScoreboardState
+	// that will write serviceLock ScoreboardState
 	updateChannel := make(chan ServiceUpdate, 10)
 	newUpdateSignal := make(chan bool, 1)
 
@@ -217,9 +223,9 @@ func (sbd *State) Start() {
 		shutdownServiceSignal <- true
 		shutdownStateUpdaterSignal <- true
 		shutdownTemplateUpdaterSignal <- true
-		sbd.lock.Lock()
+		sbd.serviceLock.Lock()
 		sbd.Config.CompetitionEnded = true
-		sbd.lock.Unlock()
+		sbd.serviceLock.Unlock()
 	})
 
 	sbd.startScoring()
@@ -264,29 +270,29 @@ func (sbd *State) startScoring() {
 
 // StateUpdater is a thread to read service updates and write the updates to ScoreboardState. We do this so
 // we don't have to give every status checking thread the ability to
-// RW lock the ScoreboardState. This lets us test services without locking.
+// RW serviceLock the ScoreboardState. This lets us test services without locking.
 // This function read locks for determining if an update should be applied to the
-// Scoreboard State. If an update needs to be applied, the function drops its read lock
-// and establishes a write lock to update the data. The write lock is maintained for as long as there
-// are service updates that need to be analyzed. If no write lock is established, the function maintains
-// it's read lock as long as there are service updates that need to be analyzed.
+// Scoreboard State. If an update needs to be applied, the function drops its read serviceLock
+// and establishes a write serviceLock to update the data. The write serviceLock is maintained for as long as there
+// are service updates that need to be analyzed. If no write serviceLock is established, the function maintains
+// it's read serviceLock as long as there are service updates that need to be analyzed.
 //
 // The end goal of this complex locking is to minimize the time spent holding a
-// write lock. however, once this function has establish a write lock,
+// write serviceLock. however, once this function has establish a write serviceLock,
 // don't drop it because it might need to be re-established nano-seconds later.
 // This function read locks for safety reasons.
 func (sbd *State) StateUpdater(updateChannel chan ServiceUpdate, updateSignal, shutdownUpdaterSignal chan bool) {
 
 	// These two flags are mutually exclusive. One being set does not rely on the other
 	// which is why we have two of them, instead of expressing their logic with a single flag.
-	// This function will drop it's read lock when it's in a sleeping state,
-	// and only establishes a read lock when needing to find data that might be
-	// changed, and only then establishing a write lock **if** that data needs to be
-	// changed. A write lock or a read lock is kept until there is no more
+	// This function will drop it's read serviceLock when it's in a sleeping state,
+	// and only establishes a read serviceLock when needing to find data that might be
+	// changed, and only then establishing a write serviceLock **if** that data needs to be
+	// changed. A write serviceLock or a read serviceLock is kept until there is no more
 	// data to be parsed through.
 	var (
-		isWriteLocked = false // Flag to hold whether we already have a lock or not.
-		isReadLocked  = false // Flag to hold whether we have a read lock.
+		isWriteLocked = false // Flag to hold whether we already have a serviceLock or not.
+		isReadLocked  = false // Flag to hold whether we have a read serviceLock.
 	)
 
 	ilog.Println("Started the Service State Updater")
@@ -304,7 +310,7 @@ func (sbd *State) StateUpdater(updateChannel chan ServiceUpdate, updateSignal, s
 
 			// Read-Lock to be safe.
 			if !isWriteLocked && !isReadLocked {
-				sbd.lock.RLock()
+				sbd.serviceLock.RLock()
 				isReadLocked = true
 			}
 
@@ -328,13 +334,13 @@ func (sbd *State) StateUpdater(updateChannel chan ServiceUpdate, updateSignal, s
 								// Found the correct service
 
 								// Decide if the update contradicts the current Scoreboard State.
-								// If it does, we need to establish a Write lock before changing
+								// If it does, we need to establish a Write serviceLock before changing
 								// the service state.
 								if service.isUp != update.IsUp {
-									if !isWriteLocked { // If we already have a RW lock, don't que another
-										sbd.lock.RUnlock() // Unlock our Read lock before Write Locking
+									if !isWriteLocked { // If we already have a RW serviceLock, don't que another
+										sbd.serviceLock.RUnlock() // Unlock our Read serviceLock before Write Locking
 										isReadLocked = false
-										sbd.lock.Lock() // WRITE LOCK
+										sbd.serviceLock.Lock() // WRITE LOCK
 										isWriteLocked = true
 									}
 
@@ -365,11 +371,11 @@ func (sbd *State) StateUpdater(updateChannel chan ServiceUpdate, updateSignal, s
 
 						// We are dealing with an ICMP update. We need to determine if the
 						// Scoreboard State needs to be updated.
-						if host.isUp != update.IsUp { // We need to establish a write lock
-							if !isWriteLocked { // If we already have a RW lock, don't que another
-								sbd.lock.RUnlock()
+						if host.isUp != update.IsUp { // We need to establish a write serviceLock
+							if !isWriteLocked { // If we already have a RW serviceLock, don't que another
+								sbd.serviceLock.RUnlock()
 								isReadLocked = false
-								sbd.lock.Lock() // WRITE LOCK
+								sbd.serviceLock.Lock() // WRITE LOCK
 								isWriteLocked = true
 							}
 
@@ -396,16 +402,16 @@ func (sbd *State) StateUpdater(updateChannel chan ServiceUpdate, updateSignal, s
 				}
 			}
 		default: // There is not another update on the line, so we'll wait for one
-			// If we have a write lock because we changed the ScoreboardState
-			// because of an ServiceUpdate, release the Write lock so clients
-			// can view content. Otherwise, we had a read lock that needs to
+			// If we have a write serviceLock because we changed the ScoreboardState
+			// because of an ServiceUpdate, release the Write serviceLock so clients
+			// can view content. Otherwise, we had a read serviceLock that needs to
 			// be released because we don't need it any longer.
 			if isWriteLocked {
 				updateSignal <- true // Signal the WebContentUpdater to re-evaluate the web content
-				sbd.lock.Unlock()
+				sbd.serviceLock.Unlock()
 				isWriteLocked = false
 			} else if isReadLocked { // This isn't a else case because this default case might be ran quickly in succession
-				sbd.lock.RUnlock()
+				sbd.serviceLock.RUnlock()
 				isReadLocked = false
 			}
 
@@ -417,8 +423,6 @@ func (sbd *State) StateUpdater(updateChannel chan ServiceUpdate, updateSignal, s
 
 // ServiceChecker is a thread for querying services. Results are shipped to the
 // ScoreboardStateUpdater as ServiceUpdates
-// We don't read-lock these threads because they should only be handling
-// copies of the data that is in the Scoreboard State, not the actual data.
 func (sbd *State) ServiceChecker(updateChannel chan ServiceUpdate, shutdownServiceSignal chan bool) {
 
 	ilog.Println("Started the Service Check Provider")
@@ -429,7 +433,7 @@ func (sbd *State) ServiceChecker(updateChannel chan ServiceUpdate, shutdownServi
 			ilog.Println("Shutting down the Service Check Provider")
 			return
 		default:
-			sbd.lock.RLock()
+			sbd.serviceLock.RLock()
 			// Go ahead and test these bad guys before going to sleep.
 			for hostIndex := range sbd.Hosts { // Check each host
 				host := sbd.Hosts[hostIndex]
@@ -443,7 +447,7 @@ func (sbd *State) ServiceChecker(updateChannel chan ServiceUpdate, shutdownServi
 						host.IP, sbd.Config.ServiceTimeout)
 				}
 			}
-			sbd.lock.RUnlock()
+			sbd.serviceLock.RUnlock()
 
 			// Sleep before testing these services again.
 			time.Sleep(sbd.Config.TimeBetweenServiceChecks)
@@ -452,10 +456,7 @@ func (sbd *State) ServiceChecker(updateChannel chan ServiceUpdate, shutdownServi
 }
 
 // PingChecker is a thread for pinging hosts. Results are shipped to the
-// ScoreboardStateUpdater (defined below) as ServiceUpdates.
-// We don't read-lock these threads with the Scoreboard State
-// Because they should only be reading copies of the data that
-// is stored in Scoreboard State.
+// ScoreboardStateUpdater as ServiceUpdates.
 func (sbd *State) PingChecker(updateChannel chan ServiceUpdate, shutdownPingSignal chan bool) {
 	if sbd.Config.PingHosts { // The ping option was set
 		ilog.Println("Started the Ping Check Provider")
@@ -466,14 +467,14 @@ func (sbd *State) PingChecker(updateChannel chan ServiceUpdate, shutdownPingSign
 				ilog.Println("Shutting down the Ping Check Provider")
 				return
 			default:
-				sbd.lock.RLock()
+				sbd.serviceLock.RLock()
 				for i := range sbd.Hosts {
 					host := sbd.Hosts[i]
 					// Asyncronously ping hosts so we don't wait full timeouts and can ping faster.
 					go host.PingHost(updateChannel, sbd.Config.PingTimeout)
 				}
 
-				sbd.lock.RUnlock()
+				sbd.serviceLock.RUnlock()
 
 				// Sleep before testing these hosts again
 				time.Sleep(sbd.Config.TimeBetweenPingChecks)

@@ -42,7 +42,7 @@ func (sbd *State) WebContentUpdater(update, shutdown chan bool) {
 		TimeLeft  time.Duration
 	}{}
 
-	sbd.lock.RLock()
+	sbd.serviceLock.RLock()
 
 	data.Title = sbd.Name
 
@@ -58,7 +58,7 @@ func (sbd *State) WebContentUpdater(update, shutdown chan bool) {
 	data.PingHosts = sbd.Config.PingHosts
 	data.TimeLeft = sbd.TimeLeft()
 
-	sbd.lock.RUnlock()
+	sbd.serviceLock.RUnlock()
 
 	byteBuf := bytes.Buffer{}
 
@@ -117,9 +117,9 @@ func (sbd *State) WebContentUpdater(update, shutdown chan bool) {
 
 	for {
 		// Update the web sheet with new data
-		sbd.webContentLock.Lock()
-		sbd.webSheet = byteBuf.Bytes()
-		sbd.webContentLock.Unlock()
+		sbd.scoreboardPageLock.Lock()
+		sbd.scoreboardPage = byteBuf.Bytes()
+		sbd.scoreboardPageLock.Unlock()
 
 		time.Sleep(1 * time.Second)
 
@@ -128,9 +128,9 @@ func (sbd *State) WebContentUpdater(update, shutdown chan bool) {
 
 		select {
 		case <-shutdown:
-			// Establish a read-only lock to the scoreboard to retrieve data,
-			// then drop the lock after we have retrieved that data we need.
-			sbd.lock.RLock()
+			// Establish a read-only serviceLock to the scoreboard to retrieve data,
+			// then drop the serviceLock after we have retrieved that data we need.
+			sbd.serviceLock.RLock()
 
 			copy(data.Hosts, sbd.Hosts)
 			for i := range data.Hosts {
@@ -139,23 +139,23 @@ func (sbd *State) WebContentUpdater(update, shutdown chan bool) {
 			}
 			data.TimeLeft = sbd.TimeLeft()
 
-			sbd.lock.RUnlock()
+			sbd.serviceLock.RUnlock()
 
 			// Update the template with the new data
 			tmplt.Execute(&byteBuf, data)
 
 			// Update the web sheet with that data
-			sbd.webContentLock.Lock()
-			sbd.webSheet = byteBuf.Bytes()
-			sbd.webContentLock.Unlock()
+			sbd.scoreboardPageLock.Lock()
+			sbd.scoreboardPage = byteBuf.Bytes()
+			sbd.scoreboardPageLock.Unlock()
 
 			// Exit
 			ilog.Println("Shutting down the Webpage Content Updater")
 			return
 		case <-update:
-			// Establish a read-only lock to the scoreboard to retrieve data,
-			// then drop the lock after we have retrieved that data we need.
-			sbd.lock.RLock()
+			// Establish a read-only serviceLock to the scoreboard to retrieve data,
+			// then drop the serviceLock after we have retrieved that data we need.
+			sbd.serviceLock.RLock()
 
 			copy(data.Hosts, sbd.Hosts)
 			for i := range data.Hosts {
@@ -163,7 +163,7 @@ func (sbd *State) WebContentUpdater(update, shutdown chan bool) {
 				copy(host.Services, sbd.Hosts[i].Services)
 			}
 
-			sbd.lock.RUnlock()
+			sbd.serviceLock.RUnlock()
 		default:
 			// Do nothing, just don't hang.
 		}
@@ -177,10 +177,42 @@ func (sbd *State) WebContentUpdater(update, shutdown chan bool) {
 	}
 }
 
+// adminPanel serves both a login page for the admin panel and the admin panel itself.
+// adminPanel implements an authorization/authentication schema that can differentiate authorized vs
+// unauthorized users and can authenticate authorized users.
+func (sbd *State) adminPanel(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "GET" {
+		if cookie, err := r.Cookie(sbd.Config.AdminName); err == nil && cookie.Value == sbd.Config.AdminPassword {
+			// Send admin home page
+			w.Write([]byte("LOGGED IN"))
+		} else {
+			// Send admin login page
+			w.Write([]byte("PLEASE LOGIN"))
+		}
+	} else if r.Method == "POST" {
+		// Determine if login or post from admin home page
+		if err := r.ParseForm(); err == nil {
+			http.SetCookie(w, &http.Cookie{
+				Name:  "admin",
+				Value: "password",
+			})
+
+			http.Redirect(w, r, "/admin", 200)
+			//w.Write([]byte(fmt.Sprintf("Username: %s Password: %s",
+			//	r.PostFormValue("username"), r.PostFormValue("password"))))
+		} else {
+			w.Write([]byte(fmt.Sprintf("BAD LOGIN ATTEMPT")))
+		}
+	} else {
+		// Send BAD METHOD
+		w.Write([]byte("HEH! THAT TICKLES"))
+	}
+}
+
 // scoreboardResponder serves the `index.html` for the scoreboard.
 // Implements scoreboardResponder for State
 func (sbd *State) scoreboardResponder(w http.ResponseWriter, r *http.Request) {
-	sbd.webContentLock.RLock()
-	io.Copy(w, bytes.NewReader(sbd.webSheet))
-	sbd.webContentLock.RUnlock()
+	sbd.scoreboardPageLock.RLock()
+	io.Copy(w, bytes.NewReader(sbd.scoreboardPage))
+	sbd.scoreboardPageLock.RUnlock()
 }

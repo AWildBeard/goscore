@@ -89,6 +89,14 @@ func (config *YamlConfig) validateConfig() error {
 		return configValidationError("You must define the 'serviceTimeout:' field under 'config:'")
 	}
 
+	if len(config.Config["managementUsername"]) == 0 {
+		return configValidationError("You must define the 'managementUsername:' field under 'config:'")
+	}
+
+	if len(config.Config["managementPassword"]) == 0 {
+		return configValidationError("You must define the 'managementPassword:' field under 'config:'")
+	}
+
 	// Check that at least one service is defined in the config file
 	if len(config.Hosts) < 1 {
 		return configValidationError("There must be at least one service defined in the config file!")
@@ -222,6 +230,18 @@ func parseConfigToScoreboard(config *YamlConfig, scoreboard *State) error {
 		scoreboard.Config.ListenAddress = listenAddr
 	} else {
 		return configValidationError(fmt.Sprint("Failed to parse listenAddress from 'config:'"))
+	}
+
+	if mgmntUsrnm := config.Config["managementUsername"]; mgmntUsrnm != "" {
+		scoreboard.Config.AdminName = mgmntUsrnm
+	} else {
+		return configValidationError("Failed to parse managementUsername from 'config:'")
+	}
+
+	if mngmntPsswd := config.Config["managementPassword"]; mngmntPsswd != "" {
+		scoreboard.Config.AdminPassword = mngmntPsswd
+	} else {
+		return configValidationError("Failed to parse managementUsername from 'config:'")
 	}
 
 	scoreboard.Hosts = config.Hosts
