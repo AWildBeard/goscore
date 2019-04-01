@@ -1,3 +1,17 @@
+// Copyright 2019 Michael Mitchell
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package main
 
 import (
@@ -17,7 +31,7 @@ func (sbd *State) WebContentUpdater(update, shutdown chan bool) {
 	// By doing this we might save some compute power on regenerating
 	// the entire web content. We might not though, and this would just
 	// be a feel good change. If timers are segmented to a subtemplate,
-	// then the correct place to execute the subtemplate would be in ServeHTTP
+	// then the correct place to execute the subtemplate would be in scoreboardResponder
 
 	ilog.Println("Started the Webpage Content Updater")
 
@@ -163,9 +177,9 @@ func (sbd *State) WebContentUpdater(update, shutdown chan bool) {
 	}
 }
 
-// ServeHTTP serves the `index.html` for the scoreboard.
-// Implements ServeHTTP for State
-func (sbd *State) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+// scoreboardResponder serves the `index.html` for the scoreboard.
+// Implements scoreboardResponder for State
+func (sbd *State) scoreboardResponder(w http.ResponseWriter, r *http.Request) {
 	sbd.webContentLock.RLock()
 	io.Copy(w, bytes.NewReader(sbd.webSheet))
 	sbd.webContentLock.RUnlock()

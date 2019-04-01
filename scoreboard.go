@@ -16,6 +16,8 @@ package main
 
 import (
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -24,7 +26,7 @@ import (
 // The hosts that are scored and the config by witch to score them.
 // There is also a RW lock to control reading and writing to this
 // type. This is implemented mainly because this type implements
-// ServeHTTP so it can serve it's data over HTTP
+// scoreboardResponder so it can serve it's data over HTTP
 type State struct {
 	// Hosts is an array of Host that this scoreboard scores
 	Hosts []Host
@@ -94,7 +96,7 @@ type Config struct {
 	// represents the time the competition started.
 	StartTime time.Time
 
-	// StopTime representes the precomputed timepoint of when the competition should end.
+	// StopTime represents the precomputed timepoint of when the competition should end.
 	StopTime time.Time
 
 	// CompetitionEnded represents whether the competition has ended
@@ -176,6 +178,28 @@ func NewScoreboard() State {
 // used to judge services and the webserver. When competition scoring has finished, the webserver is left running
 // with the scoring data until the program is killed.
 func (sbd *State) Start() {
+
+	func() {
+		connection := strings.Split(sbd.Config.ListenAddress, ":")
+		index := 0
+		if len(connection) > 1 {
+			index = 1
+		}
+
+		port, _ := strconv.Atoi(connection[index])
+
+		testPrivileges(port, sbd.Config.PingHosts)
+	}()
+
+	// HTTP Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", sbd.scoreboardResponder)
+
+	server := http.Server{
+		Addr:    sbd.Config.ListenAddress,
+		Handler: mux,
+	}
+
 	// Make a buffered channel to write service updates over. These updates will get read by a thread
 	// that will write lock ScoreboardState
 	updateChannel := make(chan ServiceUpdate, 10)
@@ -198,9 +222,6 @@ func (sbd *State) Start() {
 		sbd.lock.Unlock()
 	})
 
-	// Register '/' with ScoreboardState
-	http.Handle("/", sbd)
-
 	sbd.startScoring()
 
 	go sbd.PingChecker(updateChannel, shutdownPingSignal)
@@ -212,10 +233,9 @@ func (sbd *State) Start() {
 	go sbd.WebContentUpdater(newUpdateSignal, shutdownTemplateUpdaterSignal)
 
 	ilog.Println("Started Scoreboard")
+
 	// Start the webserver and serve content
-	if err := http.ListenAndServe(sbd.Config.ListenAddress, nil); err != nil {
-		ilog.Println("Encountered error when starting scoreboard:", err)
-	}
+	ilog.Fatal(server.ListenAndServe())
 }
 
 // startScoring initializes all the times for hosts and services, and initializes the start time and end time

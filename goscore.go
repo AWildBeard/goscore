@@ -17,6 +17,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"gopkg.in/yaml.v2"
 	"io/ioutil"
 	"log"
 	"os"
@@ -74,86 +75,88 @@ func main() {
 
 	if buildCfg { // buildcfg flag was set so write a config and exit
 		buildConfig()
-		os.Exit(0)
-	}
-
-	var (
+	} else {
 		// Create a new scoreboard
-		sbd = NewScoreboard()
-	)
+		sbd := NewScoreboard()
 
-	// Read and parse the config file
-	if config, err := initConfig(); err == nil { // Initialize the config
+		// TODO: Rework config mockup?
 
-		if err := config.validateConfig(); err != nil {
-			ilog.Println(err)
-			os.Exit(1)
-		}
+		// Read and parse the config file
+		if config, err := initConfig(); err == nil { // Initialize the config
+			// Parse the config to the scoreboard
+			if err := parseConfigToScoreboard(&config, &sbd); err != nil { // Failed to parse config
+				ilog.Println("Failed to parse config:", err)
+				os.Exit(1)
 
-		// Parse the config to the scoreboard
-		if err := parseConfigToScoreboard(&config, &sbd); err != nil { // Failed to parse config
-			ilog.Println("Failed to parse config:", err)
-			os.Exit(1)
+			} else { // Successfully parsed, now debug print the details
+				if sbd.Config.PingHosts {
+					dlog.Println("Ping hosts:", boolToWord(sbd.Config.PingHosts))
+					dlog.Println("Ping timeout:", sbd.Config.PingTimeout)
+					dlog.Println("Time between ping checking hosts:", sbd.Config.TimeBetweenPingChecks)
+				}
 
-		} else { // Successfully parsed, now debug print the details
-			if sbd.Config.PingHosts {
-				dlog.Println("Ping hosts:", boolToWord(sbd.Config.PingHosts))
-				dlog.Println("Ping timeout:", sbd.Config.PingTimeout)
-				dlog.Println("Time between ping checking hosts:", sbd.Config.TimeBetweenPingChecks)
+				dlog.Println("Service timeout:", sbd.Config.ServiceTimeout)
+				dlog.Println("Time between service checking hosts:", sbd.Config.TimeBetweenServiceChecks)
 			}
 
-			dlog.Println("Service timeout:", sbd.Config.ServiceTimeout)
-			dlog.Println("Time between service checking hosts:", sbd.Config.TimeBetweenServiceChecks)
+		} else {
+			switch err.(type) {
+			case *os.PathError:
+				err := *err.(*os.PathError)
+
+				ilog.Println("Failed to open config")
+				if err.Op == "open" {
+					ilog.Println("Run this program again with the -buildcfg flag to generate a " +
+						"config to your current working directory, or use the -c flag to specify a " +
+						"config somewhere else.")
+				} else {
+					ilog.Println("Unknown error encountered when trying to open config file:", err)
+				}
+			case *yaml.TypeError:
+				ilog.Println("Failed to decode config file:", err)
+			default:
+				ilog.Println("Encountered unexpected error:", err)
+			}
+
+			os.Exit(1)
 		}
 
-	} else {
-		ilog.Println("Critical configuration file error encountered:", err)
-		ilog.Println("This might be because the Config file wasn't found. " +
-			"If this was the problem; run this program again with the " +
-			"-buildcfg flag to generate a config or use the -c flag to " +
-			"specify your a different config!")
-		os.Exit(1)
-
+		// Start the competition!
+		sbd.Start()
 	}
-
-	// Test privileges for ICMP and opening port 80. Exit uncleanly if incorrect privileges are used.
-	testPrivileges()
-
-	// Start the competition!
-	sbd.Start()
 }
 
 // Usage function to show program usage when the -h flag is given.
 func usage() {
 	fmt.Println(`SYNOPSIS:
-	This program is designed to offer a simple scoreboard solution for
-	cyber security capture the flag competitions and comes ready to be
-	deployed for a competition. It allows specifying services to test
-	in a config file, the interval by which to test them on, and the
-	method by which to test them, including host level commands that
-	can be run and evaluated to determine the services state, or by
-	manually typing a connection string in the config file that will
-	be passed to the remote services port. This program also offers
-	a built in HTML scoreboard.
+	Goscore is designed to offer a simple scoreboard solution for
+	cyber security competitions and comes ready to be deployed for a
+	competition. It allows specifying services to test in a config 
+	file, the interval by which to test them on, and the method by 
+	which to test them; including host level commands that can be 
+	run and evaluated to determine the services state or by 
+	manually passing a connection string to the remote services port.
+	This program also offers a built in HTML scoreboard with the
+	option use your own HTML scoreboard.
 
-	If you are looking for config file help, or additional info about
-	this program, please see; https://github.com/AWildBeard/goscore/wiki
+	If you are looking for config file help, additional info about
+	this program, or are looking for help on creating your own HTML
+	scoreboard; see https://github.com/AWildBeard/goscore/wiki
 
 OPTIONS:
 	-buildcfg
-		This flag will cause the program to write an example config file
+		This flag will cause the program to write a working config file
 		to your current working directory an exit. Use this to generate
 		a config template that you can modify to suite your own needs.
 
 	-c [config file]
-		This flag allows a user to specify a directory that contains the
-		config file needed to run this program. By default, this program
-		checks for the config file in the directory where this program
-		is run, or the directory where this program is stored.
+		This flag allows a user to specify a custom config file location. 
+		By default, this program checks for the config file in the 
+		directory where this program is run (your current working 
+		directory), or the directory where this program is stored.
 
 	-d 
-		This flag enables debug output to STDERR of the console 
-		where this program was started.
+		This flag enables debug output to STDERR
 
 	-h
 		This flag will display this message and exit.

@@ -36,22 +36,32 @@ func boolToWord(flag bool) string {
 
 // This function tests privileges and initiates an unclean exit if the
 // incorrect privileges are used to run the program.
-func testPrivileges() {
-	if usr, err := user.Current(); err == nil {
+func testPrivileges(port int, pingHosts bool) {
+	if usr, err := user.Current(); err == nil && (pingHosts || port <= 1024) {
+		errStr := strings.Builder{}
+		elevatedPort := port <= 1024
+
+		errStr.WriteString("Please run with elevated privileges. This program needs " +
+			"elevated privileges to ")
+
+		if pingHosts && elevatedPort {
+			errStr.WriteString(fmt.Sprintf("open port %v and transmit ICMP", port))
+		} else if pingHosts {
+			errStr.WriteString("transmit ICMP")
+		} else if elevatedPort {
+			errStr.WriteString(fmt.Sprintf("open port %v", port))
+		}
 
 		// Attempt to identify the Administrator group
 		if runtime.GOOS == "windows" && !strings.HasSuffix(usr.Gid, "-544") {
-			fmt.Println("Please run as Administrator. " +
-				"This program needs Administrator to open port 80 and do ICMP.")
+			fmt.Println(errStr.String())
 
 			os.Exit(1)
 		} else if usr.Gid != "0" && usr.Uid != "0" { // ID root
 			if runtime.GOOS == "linux" {
-				fmt.Println("Please run as root. " +
-					"This program needs root to open port 80 and do ICMP.")
+				fmt.Println(errStr.String())
 			} else { // Dunno bud
-				fmt.Println("Please run with elevated privileges. " +
-					"This program needs elevated privileges to open port 80 and do ICMP")
+				fmt.Println(errStr.String())
 			}
 
 			os.Exit(1)
