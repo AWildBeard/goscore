@@ -30,7 +30,7 @@ type Multiplier struct {
 
 // NewMultiplier is a simple constructor to create a Multiplier
 func NewMultiplier(sourceChannel interface{}) Multiplier {
-	if value := reflect.ValueOf(sourceChannel) ; value.Kind() == reflect.Chan {
+	if value := reflect.ValueOf(sourceChannel); value.Kind() == reflect.Chan {
 		return Multiplier{
 			SourceChannel: sourceChannel,
 		}
@@ -41,7 +41,7 @@ func NewMultiplier(sourceChannel interface{}) Multiplier {
 // RegisterChannel allows adding a destination channel that should be written to when data is written to the
 // SourceChannel.
 func (mult *Multiplier) RegisterChannel(ch chan interface{}) {
-	if value := reflect.ValueOf(ch) ; value.Kind() == reflect.Chan {
+	if value := reflect.ValueOf(ch); value.Kind() == reflect.Chan {
 		mult.lock.Lock()
 		mult.destinationChannels = append(mult.destinationChannels, ch)
 		mult.lock.Unlock()
@@ -78,9 +78,9 @@ func (mult *Multiplier) Multiply() {
 			mult.lock.Lock()
 			for _, ch := range mult.destinationChannels {
 				ch := ch
-				go func (channel chan interface{}) {
+				go func(channel chan interface{}) {
 					channel <- x.Interface()
-				} (ch)
+				}(ch)
 			}
 			mult.lock.Unlock()
 		} else {
