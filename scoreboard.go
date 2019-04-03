@@ -209,20 +209,22 @@ func (sbd *State) Start() {
 	// Make a buffered channel to write service updates over. These updates will get read by a thread
 	// that will write serviceLock ScoreboardState
 	updateChannel := make(chan ServiceUpdate, 10)
-	newUpdateSignal := make(chan bool, 1)
 
-	// Make channels to write shutdown signals over
-	shutdownPingSignal := make(chan bool, 1)
-	shutdownServiceSignal := make(chan bool, 1)
-	shutdownStateUpdaterSignal := make(chan bool, 1)
-	shutdownTemplateUpdaterSignal := make(chan bool, 1)
+	// Make channels to write various signals over
+	shutdownSignal := make(chan bool, 1)
+	shutdownSignalMultiplier := NewMultiplier(shutdownSignal)
+	shutdownSignalGenerator := shutdownSignalMultiplier.ChannelGenerator()
+	go shutdownSignalMultiplier.Multiply()
+
+	updateSignal := make(chan bool, 1)
+	updateSignalMultiplier := NewMultiplier(updateSignal)
+	updateSignalGenerator := updateSignalMultiplier.ChannelGenerator()
+	go updateSignalMultiplier.Multiply()
 
 	time.AfterFunc(sbd.Config.CompetitionDuration, func() {
 		ilog.Println("The competition duration has been reached. Shutting down scoring services.")
-		shutdownPingSignal <- true
-		shutdownServiceSignal <- true
-		shutdownStateUpdaterSignal <- true
-		shutdownTemplateUpdaterSignal <- true
+		shutdownSignal <- true
+		close(shutdownSignal)
 		sbd.serviceLock.Lock()
 		sbd.Config.CompetitionEnded = true
 		sbd.serviceLock.Unlock()
@@ -230,13 +232,13 @@ func (sbd *State) Start() {
 
 	sbd.startScoring()
 
-	go sbd.PingChecker(updateChannel, shutdownPingSignal)
+	go sbd.PingChecker(updateChannel, shutdownSignalGenerator(1))
 
-	go sbd.ServiceChecker(updateChannel, shutdownServiceSignal)
+	go sbd.ServiceChecker(updateChannel, shutdownSignalGenerator(1))
 
-	go sbd.StateUpdater(updateChannel, newUpdateSignal, shutdownStateUpdaterSignal)
+	go sbd.StateUpdater(updateChannel, updateSignal, shutdownSignalGenerator(1))
 
-	go sbd.WebContentUpdater(newUpdateSignal, shutdownTemplateUpdaterSignal)
+	go sbd.WebContentUpdater(updateSignalGenerator(1), shutdownSignalGenerator(1))
 
 	ilog.Println("Started Scoreboard")
 
@@ -281,7 +283,7 @@ func (sbd *State) startScoring() {
 // write serviceLock. however, once this function has establish a write serviceLock,
 // don't drop it because it might need to be re-established nano-seconds later.
 // This function read locks for safety reasons.
-func (sbd *State) StateUpdater(updateChannel chan ServiceUpdate, updateSignal, shutdownUpdaterSignal chan bool) {
+func (sbd *State) StateUpdater(updateChannel chan ServiceUpdate, updateSignal chan bool, shutdownUpdaterSignal chan interface{}) {
 
 	// These two flags are mutually exclusive. One being set does not rely on the other
 	// which is why we have two of them, instead of expressing their logic with a single flag.
@@ -423,9 +425,12 @@ func (sbd *State) StateUpdater(updateChannel chan ServiceUpdate, updateSignal, s
 
 // ServiceChecker is a thread for querying services. Results are shipped to the
 // ScoreboardStateUpdater as ServiceUpdates
-func (sbd *State) ServiceChecker(updateChannel chan ServiceUpdate, shutdownServiceSignal chan bool) {
+func (sbd *State) ServiceChecker(updateChannel chan ServiceUpdate, shutdownServiceSignal chan interface{}) {
 
 	ilog.Println("Started the Service Check Provider")
+
+	totalWaitDuration := sbd.Config.TimeBetweenPingChecks / 1 * time.Second
+	currentWaitDuration := totalWaitDuration
 
 	for {
 		select {
@@ -433,6 +438,13 @@ func (sbd *State) ServiceChecker(updateChannel chan ServiceUpdate, shutdownServi
 			ilog.Println("Shutting down the Service Check Provider")
 			return
 		default:
+			// Sleep before testing these services again
+			if currentWaitDuration < totalWaitDuration {
+				currentWaitDuration += 1 * time.Second
+				time.Sleep(1 * time.Second)
+				continue
+			}
+
 			sbd.serviceLock.RLock()
 			// Go ahead and test these bad guys before going to sleep.
 			for hostIndex := range sbd.Hosts { // Check each host
@@ -447,19 +459,22 @@ func (sbd *State) ServiceChecker(updateChannel chan ServiceUpdate, shutdownServi
 						host.IP, sbd.Config.ServiceTimeout)
 				}
 			}
+
 			sbd.serviceLock.RUnlock()
 
-			// Sleep before testing these services again.
-			time.Sleep(sbd.Config.TimeBetweenServiceChecks)
+			currentWaitDuration -= totalWaitDuration
 		}
 	}
 }
 
 // PingChecker is a thread for pinging hosts. Results are shipped to the
 // ScoreboardStateUpdater as ServiceUpdates.
-func (sbd *State) PingChecker(updateChannel chan ServiceUpdate, shutdownPingSignal chan bool) {
+func (sbd *State) PingChecker(updateChannel chan ServiceUpdate, shutdownPingSignal chan interface{}) {
 	if sbd.Config.PingHosts { // The ping option was set
 		ilog.Println("Started the Ping Check Provider")
+
+		totalWaitDuration := sbd.Config.TimeBetweenPingChecks / 1 * time.Second
+		currentWaitDuration := totalWaitDuration
 
 		for {
 			select {
@@ -467,6 +482,13 @@ func (sbd *State) PingChecker(updateChannel chan ServiceUpdate, shutdownPingSign
 				ilog.Println("Shutting down the Ping Check Provider")
 				return
 			default:
+				// Sleep before testing these hosts again
+				if currentWaitDuration < totalWaitDuration {
+					currentWaitDuration += 1 * time.Second
+					time.Sleep(1 * time.Second)
+					continue
+				}
+
 				sbd.serviceLock.RLock()
 				for i := range sbd.Hosts {
 					host := sbd.Hosts[i]
@@ -476,8 +498,7 @@ func (sbd *State) PingChecker(updateChannel chan ServiceUpdate, shutdownPingSign
 
 				sbd.serviceLock.RUnlock()
 
-				// Sleep before testing these hosts again
-				time.Sleep(sbd.Config.TimeBetweenPingChecks)
+				currentWaitDuration -= totalWaitDuration
 			}
 		}
 	}

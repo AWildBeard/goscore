@@ -26,7 +26,7 @@ import (
 
 // WebContentUpdater is a thread that is started be Start() to update the web interface.
 // It updates the template every 5 seconds by default right now.
-func (sbd *State) WebContentUpdater(update, shutdown chan bool) {
+func (sbd *State) WebContentUpdater(update, shutdown chan interface{}) {
 	// TODO: create sub templates for timers?
 	// By doing this we might save some compute power on regenerating
 	// the entire web content. We might not though, and this would just
@@ -187,7 +187,7 @@ func (sbd *State) adminPanel(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte("LOGGED IN"))
 		} else {
 			// Send admin login page
-			w.Write([]byte("PLEASE LOGIN"))
+			io.Copy(w, bytes.NewBufferString(adminLoginPage))
 		}
 	} else if r.Method == "POST" {
 		// Determine if login or post from admin home page
@@ -197,9 +197,9 @@ func (sbd *State) adminPanel(w http.ResponseWriter, r *http.Request) {
 				Value: "password",
 			})
 
-			http.Redirect(w, r, "/admin", 200)
-			//w.Write([]byte(fmt.Sprintf("Username: %s Password: %s",
-			//	r.PostFormValue("username"), r.PostFormValue("password"))))
+			r.Method = "GET"
+
+			http.Redirect(w, r, "/admin", http.StatusFound)
 		} else {
 			w.Write([]byte(fmt.Sprintf("BAD LOGIN ATTEMPT")))
 		}
