@@ -5,4 +5,4 @@ This is a simple program that aims to create a way to define multiple serrvices 
 
 This project is not in a ready state. Do not expect any features to be implemented at this time.
 
-Created Lovingly by Michael Mitchell (@AWildBeard)
+Created by Michael Mitchell (@AWildBeard)
